@@ -1,0 +1,11 @@
+{
+    "editor.cursorSmoothCaretAnimation": true,
+    "editor.formatOnSave": true,
+    "editor.minimap.renderCharacters": false,
+    "editor.suggest.localityBonus": true,
+    "code-runner.clearPreviousOutput": true,
+    "rust-client.updateOnStartup": true,
+    "rust.all_features": true,
+    "rust.goto_def_racer_fallback": true,
+    "rust.jobs": 3
+}

@@ -1,0 +1,21 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "sourceLanguages": [
+                "rust"
+            ],
+            "name": "Debug",
+            "program": "${workspaceRoot}/target/debug/tow",
+            //"program": "${workspaceRoot}/target/debug/${workspaceRootFolderName}",
+            //"program": "/home/luuk/src/rust/tow/debug/tow",
+            "args": [],
+            "cwd": "${workspaceRoot}"
+        }
+    ]
+}

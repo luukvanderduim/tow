@@ -1,0 +1,18 @@
+[package]
+name = "tow"
+version = "0.1.0"
+edition = "2018"
+keywords = ["xfce", "accessibility", "zoom"]
+authors = ["Luuk van der Duim <luukvanderduim@gmail.com>"]
+
+[dependencies]
+x11 = "2.18"
+libxdo = "0.6"
+atk-sys = "0.7"
+time = "0.1"
+lazy_static = "1.2"
+num-integer = "0.1"
+kahan = "0.1"
+
+[build-dependencies]
+bindgen = "0.45"
