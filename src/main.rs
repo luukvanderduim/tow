@@ -3,7 +3,7 @@
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
 the Software without restriction, including without limitation the rights to use,
-copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+copy, modify, merge, ish, distribute, sublicense, and/or sell copies of the
 Software, and to permit persons to whom the Software is furnished to do so, subject
 to the following conditions:
 
@@ -18,29 +18,53 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEAL
 THE SOFTWARE. */
 
 /*
-tow: an Xfce desktop zoom ergonomy helper.
-tow has the zoom area be towed by the keyboard caret!
+tow: an ergonomy helper for desktop zoom users.
+tow has the zoom area be 'towed by the keyboard caret'.
+It is made with the Xfce4 desktop in mind,
+however it might work with other desktop environments aswell.
 */
 
 #![feature(duration_as_u128)]
 #![feature(extern_types)]
 #![allow(unused_imports)]
+#![allow(non_camel_case_types)]
 
+use daemonize::Daemonize;
 use glib;
-use gtypes;
+use glib_sys::{GDestroyNotify, GError, GHashTable, GPtrArray};
+use gobject_sys::*;
+use gtypes::primitive::{gboolean, gchar, gint, guint};
 use kahan::{KahanSum, KahanSummator};
 use libc;
 use libxdo::XDo;
 use libxdo_sys::*;
+use std::cell::Cell;
 use std::f64::consts::E;
-use std::ptr::null;
+use std::ffi::*;
+use std::ffi::{CStr, CString};
+use std::fs::File;
+use std::os::raw::c_char;
+use std::ptr::*;
 use std::thread;
 use std::time::{Duration, Instant};
-use std::os::raw::c_char;
-use atspisys; //FIXME make bindings that do not include the world
 
 const SLIDE_DUR: Duration = Duration::from_micros(1_000_000);
 const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
+
+#[derive(Clone, Copy, Debug)]
+struct CaretTowState {
+    counter: i32,
+    first_pos: (i32, i32),
+    last_pos: (i32, i32),
+}
+
+static mut caret_tow_state: Cell<CaretTowState> = Cell::new(CaretTowState {
+    counter: 0,
+    first_pos: (0, 0),
+    last_pos: (0, 0),
+});
+
+static xdo: XDo = XDo::new(None).expect("Failed to grab libXDo handle.");
 
 /* enum move_style {
     sigmoid,
@@ -70,219 +94,7 @@ fn get_sigmoid() -> Vec<f64> {
         .collect()
 } //FIXME SIGMOID DOES NOT ADD UP???
 
-// do_move is not tail-recursive! (fixable? / needed?)
-fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: u64, c: f64) {
-    if !qu.is_empty() {
-        std::thread::sleep(FRAME_DUR);
-        let mut move_amount: f64;
-
-        if let Some(value) = qu.first() {
-            move_amount = value * dx as f64 + c;
-            qu.remove(0);
-        } else {
-            println!("Wonderous machine!!");
-            return;
-        }
-
-        if move_amount < 1.0 {
-            do_move(xdo, qu, dx, move_amount)
-        } else {
-            xdo.move_mouse_relative(move_amount.trunc() as i32, 0)
-                .expect("Failed to move!");
-            dx -= move_amount.trunc() as u64;
-            do_move(xdo, qu, dx, move_amount.fract());
-        }
-    }
-}
-
-fn get_pointer_coordinates(xdo: XDo) -> (i32, i32) {
-    // libxdo-sys
-    unsafe {
-        let mut mouse_x = Vec::with_capacity(1 as usize);
-        let pmouse_x = mouse_x.as_mut_ptr();
-        let mut mouse_y = Vec::with_capacity(1 as usize);
-        let pmouse_y = mouse_y.as_mut_ptr();
-
-        if xdo_get_mouse_location(xdo, pmouse_x, pmouse_y, 0 as *mut ::libc::c_int) != 0 {
-            panic!("Failed to get (mouse) pointer location.");
-        }
-        return (*pmouse_x as i32, *pmouse_y as i32);
-    }
-}
-
-#[link(name = "atspi")]
-extern {
-
-type AtspiAccessible = _AtspiAccessible;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
- struct _AtspiAccessiblePrivate {
-    _unused: [u8; 0],
-}
- type AtspiAccessiblePrivate = _AtspiAccessiblePrivate;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
- struct _AtspiAccessible {
-     parent: AtspiObject,
-     accessible_parent: *mut AtspiAccessible,
-     children: *mut GPtrArray,
-     role: AtspiRole,
-     interfaces: gint,
-     name: *mut ::std::os::raw::c_char,
-     description: *mut ::std::os::raw::c_char,
-     states: *mut AtspiStateSet,
-     attributes: *mut GHashTable,
-     cached_properties: guint,
-     priv_: *mut AtspiAccessiblePrivate,
-}
-
-type AtspiStateSet = _AtspiStateSet;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
- struct _AtspiStateSet {
-     parent: GObject,
-     accessible: *mut _AtspiAccessible,
-     states: gint64,
-}
-
-type AtspiRole = u32;
-
-type AtspiEventListenerSimpleCB =
-    ::std::option::Option<unsafe extern "C" fn(event: *const AtspiEvent)>;
-
- type AtspiEventListener = _AtspiEventListener;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
- struct _AtspiEventListener {
-     parent: GObject,
-     callback: AtspiEventListenerCB,
-     user_data: *mut ::std::os::raw::c_void,
-     cb_destroyed: GDestroyNotify,
-}
-
- type AtspiEvent = _AtspiEvent;
-#[repr(C)]
-#[derive(Copy, Clone)]
- struct _AtspiEvent {
-     type_: *mut gchar,
-     source: *mut AtspiAccessible,
-     detail1: gint,
-     detail2: gint,
-     any_data: GValue,
-}
- type AtspiText = _AtspiText;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
- struct _AtspiText {
-     parent: GTypeInterface,
-}
- type AtspiRect = _AtspiRect;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
- struct _AtspiRect {
-     x: gint,
-     y: gint,
-     width: gint,
-     height: gint,
-}
-
-    // atspi_misc
- fn atspi_init() -> ::std::os::raw::c_int;
- fn atspi_exit() -> ::std::os::raw::c_int;
-    fn atspi_event_main();
-    fn atspi_event_quit();
- fn atspi_get_desktop_count() -> gint;
-
-    // atspi_text
-    fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
- fn atspi_text_get_character_extents(
-        obj: *mut AtspiText,
-        offset: gint,
-        type_: AtspiCoordType,
-        error: *mut *mut GError,
-    ) -> *mut AtspiRect;
-
-    // atspi_accessible
- fn atspi_accessible_get_text(obj: *mut AtspiAccessible) -> *mut AtspiText;
- fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
-
-    // atsi_event
- fn atspi_event_listener_new_simple(
-    callback: AtspiEventListenerSimpleCB,
-    callback_destroyed: GDestroyNotify,
-    ) -> *mut AtspiEventListener;
-
-type AtspiEventListenerSimpleCB =
-    ::std::option::Option<unsafe extern "C" fn(event: *const AtspiEvent)>;
-
- fn atspi_event_listener_register(
-    listener: *mut AtspiEventListener,
-    event_type: *const gchar,
-    error: *mut *mut GError,
-    ) -> gboolean;
-
- fn atspi_event_listener_register_no_data(
-    callback: AtspiEventListenerSimpleCB,
-    callback_destroyed: GDestroyNotify,
-    event_type: *const gchar,
-    error: *mut *mut GError,
-    ) -> gboolean;
-
-}
-
-extern fn on_caret_move(event: *const AtspiEvent) {
-    // on_caret_ev(AtspiEvent *event)
-  unsafe {
-  type ptrAtspiAccessible = *mut AtspiAccessible;
-  type ptrAtspiText = *mut AtspiText;
-  type ptrAtspiRect = *mut AtspiRect;
-  let mut application: ptrAtspiAccessible = AtspiAccessible;
-  let mut app_name: gtypes::gchar = "".as_ptr();
-  let mut text_iface: ptrAtspiText = *mut std::ptr::null();
-  let mut cpos_bounds: ptrAtspiRect = *mut std::ptr::null();
-  }
-  let mut caret_offset: gtypes::gint = 0;
-
-  text_iface = atspi_accessible_get_text_iface(event->source);
-  if text_iface.is_null()
-  {
-    g_print("Wonderous machine: event happened, yet caret not in a text component\n");
-    g_print("Accessible: %s\nDescription: %s\n", atspi_accessible_get_name(event->source, NULL),
-            atspi_accessible_get_description(event->source, NULL));
-  }
-
-  caret_offset = atspi_text_get_caret_offset(text_iface, NULL);
-  g_print("Caret offset: %d\n", caret_offset);
-
-  // Because we cannot ask for the co-ordinates of the caret directly,
-  // we ask for the bounding box of the glyph at the position one before the carets.
-  // (often there will not be a glyph at the carets position and we'll have more chance finding one at the preceding position)
-  cpos_bounds = atspi_text_get_character_extents(text_iface, --caret_offset, ATSPI_COORD_TYPE_SCREEN, NULL);
-  g_print("Caret position (%d, %d)\n", cpos_bounds->x, cpos_bounds->y);
-
-}
-
-
-fn main() {
-
-let AtspiEventListener
-
-    // AT-SPI event listeners
-    unsafe {
-        let listener: plistener = atspi_event_listener_new_simple(on_caret_move, std::ptr::null());
-        // FIXME: Error handling
-    }
-
-    // AT-SPI init
-    if unsafe { atspisys::atspi_init() } != 0 {
-        eprintln!("Could not initialise AT-SPI.");
-    }
-
-    let x1: i32 = 0;
-    let x2: i32 = 300;
-    let distance: u64 = (x2 - x1).abs() as u64;
-
+fn get_move_queue() -> Vec<f64> {
     let mut halfqueue = get_sigmoid().clone();
     let mut queue: Vec<f64> = get_sigmoid().clone();
     // Add halfqueue to queue in reversed order.
@@ -294,14 +106,315 @@ let AtspiEventListener
             eprintln!("Wonderous machine!");
         }
     }
+    queue
+}
 
-    let xdo = XDo::new(None).expect("Failed to grab libXDo/X11 handle.");
-    do_move(xdo, queue, distance, 0.0);
+// do_move is not tail-recursive! (fixable? / needed?)
+fn do_tow(dx: i32, dy: i32) {
+    let mut mq = get_move_queue();
+    do_move(mq, dx, dy, 0.0, 0.0);
+}
+fn do_move(mut qu: Vec<f64>, mut dx: i32, mut dy: i32, mut cx: f64, mut cy: f64) {
+    if !qu.is_empty() {
+        let mut move_amount: f64;
+        let y_as_xfraction: f64 = dy as f64 / dx as f64;
 
+        if let Some(value) = qu.first() {
+            move_amount = value * dx as f64 + cx; // cx times value?
+            qu.remove(0);
+        } else {
+            println!("Wonderous machine!! do_tow failed in calculating move");
+            return;
+        }
 
-
-
-    if unsafe { atspisys::atspi_exit() } != 0 {
-        eprintln!("AT-SPI exit failed.");
+        if move_amount < 1.0 {
+            do_move(qu, dx, dy, move_amount, move_amount * y_as_xfraction);
+        } else {
+            let amount_y: i32 = (move_amount * y_as_xfraction.trunc()) as i32;
+            xdo.move_mouse_relative(move_amount.trunc() as i32, amount_y)
+                .expect("Failed to move!");
+            dx -= move_amount.trunc() as i32;
+            dy -= amount_y;
+            do_move(
+                qu,
+                dx,
+                dy,
+                move_amount.fract(),
+                move_amount * y_as_xfraction.fract(),
+            );
+            std::thread::sleep(FRAME_DUR);
+        }
     }
+}
+
+// Disabled due to XDo from XDotool and XDo from -sys
+/* fn get_pointer_coordinates(handle: XDo) -> (i32, i32) {
+    // libxdo-sys
+    let mut mouse_x = Vec::with_capacity(1 as usize);
+    let pmouse_x = mouse_x.as_mut_ptr();
+    let mut mouse_y = Vec::with_capacity(1 as usize);
+    let pmouse_y = mouse_y.as_mut_ptr();
+
+    let p_xdo = &handle as *const i32 as *const csize_t;
+
+    unsafe {
+        xdo_get_mouse_location(p_xdo, pmouse_x, pmouse_y, 0 as *mut ::libc::c_int);
+    }
+    // FIXME: Check for return != 0
+    return (*pmouse_x as i32, *pmouse_y as i32);
+} */
+
+// ================= Foreign Types
+type AtspiCache = u32;
+
+type AtspiObject = _AtspiObject;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct _AtspiObject {
+    parent: GObject,
+    app: *const ::std::os::raw::c_void,
+    path: *mut ::std::os::raw::c_char,
+}
+
+type AtspiAccessible = _AtspiAccessible;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct _AtspiAccessible {
+    parent: AtspiObject,
+    accessible_parent: *mut AtspiAccessible,
+    children: *mut GPtrArray,
+    role: AtspiRole,
+    interfaces: gint,
+    name: *mut ::std::os::raw::c_char,
+    description: *mut ::std::os::raw::c_char,
+    states: *const ::std::os::raw::c_void, //AtspiStateSet
+    attributes: *mut GHashTable,
+    cached_properties: guint,
+    priv_: *const ::std::os::raw::c_void, // AtspiAccessiblePrivate
+}
+type AtspiEventListenerCB = ::std::option::Option<
+    unsafe extern "C" fn(event: *mut AtspiEvent, user_data: *mut ::std::os::raw::c_void),
+>;
+type AtspiRole = u32;
+
+type AtspiEventListener = _AtspiEventListener;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct _AtspiEventListener {
+    parent: GObject,
+    callback: AtspiEventListenerCB,
+    user_data: *mut ::std::os::raw::c_void,
+    cb_destroyed: GDestroyNotify,
+}
+type AtspiLocaleType = u32;
+type AtspiCoordType = u32;
+const ATSPI_COORD_TYPE_SCREEN: AtspiCoordType = 0;
+const ATSPI_COORD_TYPE_WINDOW: AtspiCoordType = 1;
+
+type AtspiEvent = _AtspiEvent;
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct _AtspiEvent {
+    type_: *mut gchar,
+    source: *mut AtspiAccessible,
+    detail1: gint,
+    detail2: gint,
+    any_data: GValue,
+}
+type AtspiText = _AtspiText;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct _AtspiText {
+    parent: GTypeInterface,
+}
+type AtspiRect = _AtspiRect;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct _AtspiRect {
+    x: gint,
+    y: gint,
+    width: gint,
+    height: gint,
+}
+type AtspiEventListenerSimpleCB =
+    ::std::option::Option<unsafe extern "C" fn(event: *const AtspiEvent)>;
+type gint8 = ::std::os::raw::c_schar;
+type guint8 = ::std::os::raw::c_uchar;
+type gint16 = ::std::os::raw::c_short;
+type guint16 = ::std::os::raw::c_ushort;
+type gint32 = ::std::os::raw::c_int;
+type guint32 = ::std::os::raw::c_uint;
+type gint64 = ::std::os::raw::c_long;
+type guint64 = ::std::os::raw::c_ulong;
+type gssize = ::std::os::raw::c_long;
+type gsize = ::std::os::raw::c_ulong;
+type goffset = gint64;
+type gintptr = ::std::os::raw::c_long;
+type guintptr = ::std::os::raw::c_ulong;
+type GPid = ::std::os::raw::c_int;
+
+type GQuark = guint32;
+
+//=========== End foreign types
+//=========== Foreign Functions
+#[link(name = "atspi")]
+extern "C" {
+    //--------- atspi_misc
+    fn atspi_init() -> ::std::os::raw::c_int;
+    fn atspi_exit() -> ::std::os::raw::c_int;
+    fn atspi_event_main();
+    fn atspi_event_quit();
+    fn atspi_get_desktop_count() -> gint;
+
+    //-------- atspi_text
+    fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
+    fn atspi_text_get_character_extents(
+        obj: *mut AtspiText,
+        offset: gint,
+        type_: AtspiCoordType,
+        error: *mut *mut GError,
+    ) -> *mut AtspiRect;
+
+    //------- atspi_accessible
+    fn atspi_accessible_get_text(obj: *mut AtspiAccessible) -> *mut AtspiText;
+    fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
+
+    //------- atsi_event
+    fn atspi_event_listener_new_simple(
+        callback: AtspiEventListenerSimpleCB,
+        callback_destroyed: GDestroyNotify,
+    ) -> *mut AtspiEventListener;
+
+    fn atspi_event_listener_register(
+        listener: *mut AtspiEventListener,
+        event_type: *const gchar,
+        error: *mut *mut GError,
+    ) -> gboolean;
+
+    fn atspi_event_listener_register_no_data(
+        callback: AtspiEventListenerSimpleCB,
+        callback_destroyed: GDestroyNotify,
+        event_type: *const gchar,
+        error: *mut *mut GError,
+    ) -> gboolean;
+
+}
+//=========== End foreign functions
+
+extern "C" fn on_caret_move(event: *const AtspiEvent) {
+    use std::ptr::null_mut;
+    let mut caret_offset: gtypes::gint = 0;
+
+    let mut text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
+    caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
+
+    println!("Caret offset: {:?}", caret_offset);
+
+    // Because we cannot ask for the co-ordinates of the caret directly,
+    // we ask for the bounding box of the glyph at the position one before the carets.
+    // (often there will not be a glyph at the carets position and we'll have more chance finding one at the preceding position)
+
+    let cpos_bounds = unsafe {
+        atspi_text_get_character_extents(
+            text_iface,
+            caret_offset - 1,
+            ATSPI_COORD_TYPE_SCREEN,
+            null_mut(), // GError
+        )
+    };
+
+    // Dereferencing Raw in the println, unsafe
+    unsafe {
+        println!(
+            "Caret position ({}, {})",
+            (*cpos_bounds).x,
+            (*cpos_bounds).y
+        );
+        let tup: (i32, i32) = ((*cpos_bounds).x, (*cpos_bounds).y);
+        let mut current_cts = caret_tow_state.get();
+        match current_cts.counter {
+            0 => {
+                current_cts.counter += 1;
+                current_cts.first_pos = tup;
+                current_cts.last_pos = tup;
+                caret_tow_state.replace(current_cts);
+            }
+            1..=9 => {
+                current_cts.counter += 1;
+                current_cts.last_pos = tup;
+                caret_tow_state.replace(current_cts);
+            }
+            10 => {
+                current_cts.counter = 0;
+                let dx: i32 = current_cts.last_pos.0 - current_cts.first_pos.0;
+                let dy: i32 = current_cts.last_pos.1 - current_cts.first_pos.1;
+                current_cts.first_pos = (0, 0);
+                caret_tow_state.replace(current_cts);
+                do_tow(dx, dy);
+            }
+            _ => {
+                unreachable!();
+            }
+        };
+    } // FIXME: Too long an unsafe block!
+}
+
+fn spookify_tow() {
+    let stdout = File::create("/tmp/tow-daeomon.out").unwrap();
+    let stderr = File::create("/tmp/tow-daemon.err").unwrap();
+
+    let daemonize = Daemonize::new()
+        .pid_file("/tmp/tow.pid") // Every method except `new` and `start`
+        .chown_pid_file(true) // is optional, see `Daemonize` documentation
+        .working_directory("/tmp") // for default behaviour.
+        .user("nobody")
+        .group("daemon") // Group name
+        .group(2) // or group id.
+        .umask(0o777) // Set umask, `0o027` by default.
+        .stdout(stdout) // Redirect stdout to `/tmp/daemon.out`.
+        .stderr(stderr) // Redirect stderr to `/tmp/daemon.err`.
+        .privileged_action(|| "Executed before drop privileges");
+
+    match daemonize.start() {
+        Ok(_) => println!("Success, daemonized"),
+        Err(e) => eprintln!("Error, {}", e),
+    }
+}
+
+fn main() {
+    spookify_tow();
+
+    let evfn: AtspiEventListenerSimpleCB = Some(on_caret_move);
+    let ptr = CString::new("Hello").expect("CString::new failed").as_ptr();
+    let towerror = unsafe { glib_sys::g_error_new(0, 0, ptr) };
+
+    // AT-SPI event listeners
+    let listener = unsafe { atspi_event_listener_new_simple(evfn, None) };
+    // FIX: introduce proper error handling please
+
+    // AT-SPI init
+    if unsafe { atspi_init() } != 0 {
+        eprintln!("Could not initialise AT-SPI.");
+    }
+
+    let evtype = CString::new("object:text-caret-moved")
+        .expect("CString::new failed")
+        .as_ptr();
+    // let evtype = s.into_raw() as *const i8;
+    let err: *mut *mut GError = std::ptr::null_mut();
+
+    // let &mut zilch = null_mut::<GError>(&mut towerror); // Fixme into proper Error handling!
+
+    unsafe {
+        atspi_event_listener_register(listener, evtype, err);
+    }
+
+    unsafe {
+        atspi_event_main();
+    }
+
+    /*     if unsafe { atspi_exit() } != 0 {
+                    eprintln!("AT-SPI exit failed.");
+    } */
 }
