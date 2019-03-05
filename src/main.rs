@@ -23,6 +23,7 @@ tow has the zoom area be 'towed by the keyboard caret'.
 It is made with the Xfce4 desktop in mind,
 however it might work with other desktop environments aswell.
 */
+//#![warn(clippy)#![warn(clippy)]
 
 #![feature(duration_as_u128)]
 #![feature(extern_types)]
@@ -58,13 +59,11 @@ struct CaretTowState {
     last_pos: (i32, i32),
 }
 
-static mut caret_tow_state: Cell<CaretTowState> = Cell::new(CaretTowState {
+static mut CARET_TOW_STATE: Cell<CaretTowState> = Cell::new(CaretTowState {
     counter: 0,
     first_pos: (0, 0),
     last_pos: (0, 0),
 });
-
-static xdo: XDo = XDo::new(None).expect("Failed to grab libXDo handle.");
 
 /* enum move_style {
     sigmoid,
@@ -111,12 +110,13 @@ fn get_move_queue() -> Vec<f64> {
 
 // do_move is not tail-recursive! (fixable? / needed?)
 fn do_tow(dx: i32, dy: i32) {
-    let mut mq = get_move_queue();
-    do_move(mq, dx, dy, 0.0, 0.0);
+    let mq = get_move_queue();
+    let xdo = XDo::new(None).expect("Failed to grab libXDo handle.");
+    do_move(xdo, mq, dx, dy, 0.0, 0.0);
 }
-fn do_move(mut qu: Vec<f64>, mut dx: i32, mut dy: i32, mut cx: f64, mut cy: f64) {
+fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64, cy: f64) {
     if !qu.is_empty() {
-        let mut move_amount: f64;
+        let move_amount: f64;
         let y_as_xfraction: f64 = dy as f64 / dx as f64;
 
         if let Some(value) = qu.first() {
@@ -128,14 +128,17 @@ fn do_move(mut qu: Vec<f64>, mut dx: i32, mut dy: i32, mut cx: f64, mut cy: f64)
         }
 
         if move_amount < 1.0 {
-            do_move(qu, dx, dy, move_amount, move_amount * y_as_xfraction);
+            dbg!("do move!");
+            do_move(xdo, qu, dx, dy, move_amount, move_amount * y_as_xfraction);
         } else {
             let amount_y: i32 = (move_amount * y_as_xfraction.trunc()) as i32;
+
             xdo.move_mouse_relative(move_amount.trunc() as i32, amount_y)
                 .expect("Failed to move!");
             dx -= move_amount.trunc() as i32;
             dy -= amount_y;
             do_move(
+                xdo,
                 qu,
                 dx,
                 dy,
@@ -306,7 +309,7 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
     use std::ptr::null_mut;
     let mut caret_offset: gtypes::gint = 0;
 
-    let mut text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
+    let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
     println!("Caret offset: {:?}", caret_offset);
@@ -332,25 +335,25 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
             (*cpos_bounds).y
         );
         let tup: (i32, i32) = ((*cpos_bounds).x, (*cpos_bounds).y);
-        let mut current_cts = caret_tow_state.get();
+        let mut current_cts = CARET_TOW_STATE.get();
         match current_cts.counter {
             0 => {
                 current_cts.counter += 1;
                 current_cts.first_pos = tup;
                 current_cts.last_pos = tup;
-                caret_tow_state.replace(current_cts);
+                CARET_TOW_STATE.replace(current_cts);
             }
             1..=9 => {
                 current_cts.counter += 1;
                 current_cts.last_pos = tup;
-                caret_tow_state.replace(current_cts);
+                CARET_TOW_STATE.replace(current_cts);
             }
             10 => {
                 current_cts.counter = 0;
                 let dx: i32 = current_cts.last_pos.0 - current_cts.first_pos.0;
                 let dy: i32 = current_cts.last_pos.1 - current_cts.first_pos.1;
                 current_cts.first_pos = (0, 0);
-                caret_tow_state.replace(current_cts);
+                CARET_TOW_STATE.replace(current_cts);
                 do_tow(dx, dy);
             }
             _ => {
@@ -366,11 +369,11 @@ fn spookify_tow() {
 
     let daemonize = Daemonize::new()
         .pid_file("/tmp/tow.pid") // Every method except `new` and `start`
-        .chown_pid_file(true) // is optional, see `Daemonize` documentation
+        //.chown_pid_file(true) // is optional, see `Daemonize` documentation
         .working_directory("/tmp") // for default behaviour.
-        .user("nobody")
-        .group("daemon") // Group name
-        .group(2) // or group id.
+        //.user("nobody")
+        // .group("daemon") // Group name
+        // .group(2) // or group id.
         .umask(0o777) // Set umask, `0o027` by default.
         .stdout(stdout) // Redirect stdout to `/tmp/daemon.out`.
         .stderr(stderr) // Redirect stderr to `/tmp/daemon.err`.
@@ -391,12 +394,14 @@ fn main() {
 
     // AT-SPI event listeners
     let listener = unsafe { atspi_event_listener_new_simple(evfn, None) };
+    dbg!("Called listener_new_simple");
     // FIX: introduce proper error handling please
 
     // AT-SPI init
     if unsafe { atspi_init() } != 0 {
         eprintln!("Could not initialise AT-SPI.");
     }
+    dbg!("Called Atspi init ");
 
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
@@ -404,17 +409,17 @@ fn main() {
     // let evtype = s.into_raw() as *const i8;
     let err: *mut *mut GError = std::ptr::null_mut();
 
-    // let &mut zilch = null_mut::<GError>(&mut towerror); // Fixme into proper Error handling!
-
     unsafe {
         atspi_event_listener_register(listener, evtype, err);
     }
+    dbg!("Called Atspi_listener_register ");
 
     unsafe {
         atspi_event_main();
     }
+    dbg!("Called Atspi_main() ");
 
     /*     if unsafe { atspi_exit() } != 0 {
-                    eprintln!("AT-SPI exit failed.");
+                        eprintln!("AT-SPI exit failed.");
     } */
 }
