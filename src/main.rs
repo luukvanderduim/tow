@@ -128,7 +128,7 @@ fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64, cy: f6
         }
 
         if move_amount < 1.0 {
-            dbg!("do move!");
+            // dbg!("do move!");
             do_move(xdo, qu, dx, dy, move_amount, move_amount * y_as_xfraction);
         } else {
             let amount_y: i32 = (move_amount * y_as_xfraction.trunc()) as i32;
@@ -312,7 +312,7 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
-    println!("Caret offset: {:?}", caret_offset);
+    // println!("Caret offset: {:?}", caret_offset);
 
     // Because we cannot ask for the co-ordinates of the caret directly,
     // we ask for the bounding box of the glyph at the position one before the carets.
@@ -329,11 +329,11 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
 
     // Dereferencing Raw in the println, unsafe
     unsafe {
-        println!(
+        /*         println!(
             "Caret position ({}, {})",
             (*cpos_bounds).x,
             (*cpos_bounds).y
-        );
+        ); */
         let tup: (i32, i32) = ((*cpos_bounds).x, (*cpos_bounds).y);
         let mut current_cts = CARET_TOW_STATE.get();
         match current_cts.counter {
@@ -369,11 +369,7 @@ fn spookify_tow() {
 
     let daemonize = Daemonize::new()
         .pid_file("/tmp/tow.pid") // Every method except `new` and `start`
-        //.chown_pid_file(true) // is optional, see `Daemonize` documentation
         .working_directory("/tmp") // for default behaviour.
-        //.user("nobody")
-        // .group("daemon") // Group name
-        // .group(2) // or group id.
         .umask(0o777) // Set umask, `0o027` by default.
         .stdout(stdout) // Redirect stdout to `/tmp/daemon.out`.
         .stderr(stderr) // Redirect stderr to `/tmp/daemon.err`.
@@ -386,38 +382,39 @@ fn spookify_tow() {
 }
 
 fn main() {
-    spookify_tow();
+    // spookify_tow();
 
     let evfn: AtspiEventListenerSimpleCB = Some(on_caret_move);
-    let ptr = CString::new("Hello").expect("CString::new failed").as_ptr();
+    let ptr = CString::new("").expect("CString::new failed").as_ptr();
     let towerror = unsafe { glib_sys::g_error_new(0, 0, ptr) };
 
     // AT-SPI event listeners
     let listener = unsafe { atspi_event_listener_new_simple(evfn, None) };
-    dbg!("Called listener_new_simple");
+    // dbg!("Called listener_new_simple");
     // FIX: introduce proper error handling please
 
     // AT-SPI init
     if unsafe { atspi_init() } != 0 {
         eprintln!("Could not initialise AT-SPI.");
     }
-    dbg!("Called Atspi init ");
+    // dbg!("Called Atspi init ");
 
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
-        .as_ptr();
-    // let evtype = s.into_raw() as *const i8;
+        .into_raw() as *const i8;
     let err: *mut *mut GError = std::ptr::null_mut();
 
     unsafe {
         atspi_event_listener_register(listener, evtype, err);
     }
-    dbg!("Called Atspi_listener_register ");
+    //dbg!("Called Atspi_listener_register ");
+
+    // do_tow(100, 60);
 
     unsafe {
         atspi_event_main();
     }
-    dbg!("Called Atspi_main() ");
+    // dbg!("Called Atspi_main() ");
 
     /*     if unsafe { atspi_exit() } != 0 {
                         eprintln!("AT-SPI exit failed.");
