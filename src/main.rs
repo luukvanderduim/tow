@@ -301,25 +301,23 @@ extern "C" {
 
 extern "C" fn on_caret_move(event: *const AtspiEvent) {
     use std::ptr::null_mut;
-    let mut caret_offset: gtypes::gint = 0;
-    let eventcopy: *const AtspiEvent = event.clone();
-
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
-    caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
+    let mut caret_offset: gtypes::gint =
+        unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
-    /* 'Detail1' would be the mask of event(s) we registered for (?) */
-    if unsafe { ((*eventcopy).detail1 == 0) } {
+    /* 'Detail1' is likely the mask of event(s) we registered for (?) */
+    if unsafe { ((*event).detail1 == 0) } {
         return;
     }
 
     // println!("Caret offset: {:?}", caret_offset);
 
-    // Because we cannot ask for the co-ordinates of the caret directly,
-    // we ask for the bounding box of the glyph at the position one before the carets.
-    // (often there will not be a glyph at the carets position and we'll have more
-    // chance finding one at the preceding position)
+    /*   Because we cannot ask for the co-ordinates of the caret directly,
+                                    we ask for the bounding box of the glyph at the position one before the carets.
+                                    (often there will not be a glyph at the carets position and we'll have more
+    chance finding one at the preceding position) */
 
-    let cpos_bounds = unsafe {
+    let glyph_extents = unsafe {
         atspi_text_get_character_extents(
             text_iface,
             caret_offset - 1,
@@ -327,45 +325,47 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
             null_mut(), // GError
         )
     };
+    debug_assert!(!glyph_extents.is_null());
 
-    // Dereferencing Raw in the println, unsafe
-    unsafe {
-        /*         println!(
-            "Caret position ({}, {})",
-            (*cpos_bounds).x,
-            (*cpos_bounds).y
-        ); */
-        let tup: (i32, i32) = ((*cpos_bounds).x, (*cpos_bounds).y);
-        let mut current_cts = CARET_TOW_STATE.get();
-        match current_cts.counter {
-            0 => {
-                current_cts.counter += 1;
-                current_cts.first_pos = tup;
-                current_cts.last_pos = tup;
-                CARET_TOW_STATE.replace(current_cts);
-            }
-            1..=9 => {
-                current_cts.counter += 1;
-                current_cts.last_pos = tup;
-                CARET_TOW_STATE.replace(current_cts);
-            }
-            10 => {
-                current_cts.counter = 0;
-                let dx: i32 = current_cts.last_pos.0 - current_cts.first_pos.0;
-                let dy: i32 = current_cts.last_pos.1 - current_cts.first_pos.1;
-                current_cts.first_pos = (0, 0);
-                CARET_TOW_STATE.replace(current_cts);
-                do_tow(dx, dy);
-            }
-            _ => {
-                unreachable!();
-            }
-        };
-    } // FIXME: Too long an unsafe block!
+    // Often atspi_text_get_character_extents() seems to return twice:
+    // Once with a valid value and once, supposedly at the origin of the screen
+    // Until the cause is found and fixed, filter these.
+    if unsafe { ((*glyph_extents).x == 0) && ((*glyph_extents).y == 0) } {
+        return;
+    }
+
+    let tup: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
+    let mut current_cts = unsafe { CARET_TOW_STATE.get() };
+
+    match current_cts.counter {
+        0 => {
+            current_cts.counter += 1;
+            current_cts.first_pos = tup;
+            current_cts.last_pos = tup;
+            unsafe { CARET_TOW_STATE.replace(current_cts) };
+        }
+        1..=9 => {
+            current_cts.counter += 1;
+            current_cts.last_pos = tup;
+            unsafe { CARET_TOW_STATE.replace(current_cts) };
+        }
+        10 => {
+            current_cts.last_pos = tup;
+            let dx: i32 = current_cts.last_pos.0 - current_cts.first_pos.0;
+            let dy: i32 = current_cts.last_pos.1 - current_cts.first_pos.1;
+            current_cts.counter = 0;
+            current_cts.first_pos = (0, 0);
+            unsafe { CARET_TOW_STATE.replace(current_cts) };
+            do_tow(dx, dy);
+        }
+        _ => {
+            unreachable!();
+        }
+    };
 }
 
 fn spookify_tow() {
-    let stdout = File::create("/tmp/tow-daeomon.out").unwrap();
+    let stdout = File::create("/tmp/tow-daemon.out").unwrap();
     let stderr = File::create("/tmp/tow-daemon.err").unwrap();
 
     let daemonize = Daemonize::new()
