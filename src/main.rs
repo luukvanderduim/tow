@@ -27,27 +27,21 @@ however it might work with other desktop environments aswell.
 
 #![feature(duration_as_u128)]
 #![feature(extern_types)]
-#![allow(unused_imports)]
+// #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
+// use libxdo_sys::*;  To find pointer co-ordinates
 use daemonize::Daemonize;
-use glib;
 use glib_sys::{GDestroyNotify, GError, GHashTable, GPtrArray};
 use gobject_sys::*;
 use gtypes::primitive::{gboolean, gchar, gint, guint};
 use kahan::{KahanSum, KahanSummator};
-use libc;
 use libxdo::XDo;
-use libxdo_sys::*;
 use std::cell::Cell;
 use std::f64::consts::E;
-use std::ffi::*;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fs::File;
-use std::os::raw::c_char;
-use std::ptr::*;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const SLIDE_DUR: Duration = Duration::from_micros(1_000_000);
 const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
@@ -112,7 +106,8 @@ fn get_move_queue() -> Vec<f64> {
 fn do_tow(dx: i32, dy: i32) {
     let mq = get_move_queue();
     let xdo = XDo::new(None).expect("Failed to grab libXDo handle.");
-    do_move(xdo, mq, dx, dy, 0.0, 0.0);
+    //do_move(xdo, mq, dx, dy, 0.0, 0.0);
+    xdo.move_mouse_relative(dx, dy).expect("Failed to move!");
 }
 fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64, cy: f64) {
     if !qu.is_empty() {
@@ -152,7 +147,6 @@ fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64, cy: f6
 
 // Disabled due to XDo from XDotool and XDo from -sys
 /* fn get_pointer_coordinates(handle: XDo) -> (i32, i32) {
-    // libxdo-sys
     let mut mouse_x = Vec::with_capacity(1 as usize);
     let pmouse_x = mouse_x.as_mut_ptr();
     let mut mouse_y = Vec::with_capacity(1 as usize);
@@ -221,7 +215,7 @@ type AtspiEvent = _AtspiEvent;
 struct _AtspiEvent {
     type_: *mut gchar,
     source: *mut AtspiAccessible,
-    detail1: gint,
+    detail1: gint, // Registered events mask (?)
     detail2: gint,
     any_data: GValue,
 }
@@ -308,15 +302,22 @@ extern "C" {
 extern "C" fn on_caret_move(event: *const AtspiEvent) {
     use std::ptr::null_mut;
     let mut caret_offset: gtypes::gint = 0;
+    let eventcopy: *const AtspiEvent = event.clone();
 
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
+
+    /* 'Detail1' would be the mask of event(s) we registered for (?) */
+    if unsafe { ((*eventcopy).detail1 == 0) } {
+        return;
+    }
 
     // println!("Caret offset: {:?}", caret_offset);
 
     // Because we cannot ask for the co-ordinates of the caret directly,
     // we ask for the bounding box of the glyph at the position one before the carets.
-    // (often there will not be a glyph at the carets position and we'll have more chance finding one at the preceding position)
+    // (often there will not be a glyph at the carets position and we'll have more
+    // chance finding one at the preceding position)
 
     let cpos_bounds = unsafe {
         atspi_text_get_character_extents(
@@ -382,22 +383,22 @@ fn spookify_tow() {
 }
 
 fn main() {
-    // spookify_tow();
+    spookify_tow();
 
     let evfn: AtspiEventListenerSimpleCB = Some(on_caret_move);
+    let yoghurt: GQuark = 2651;
     let ptr = CString::new("").expect("CString::new failed").as_ptr();
-    let towerror = unsafe { glib_sys::g_error_new(0, 0, ptr) };
+
+    let towerror = unsafe { glib_sys::g_error_new(yoghurt, 0, ptr) };
 
     // AT-SPI event listeners
     let listener = unsafe { atspi_event_listener_new_simple(evfn, None) };
-    // dbg!("Called listener_new_simple");
     // FIX: introduce proper error handling please
 
     // AT-SPI init
     if unsafe { atspi_init() } != 0 {
         eprintln!("Could not initialise AT-SPI.");
     }
-    // dbg!("Called Atspi init ");
 
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
@@ -407,16 +408,12 @@ fn main() {
     unsafe {
         atspi_event_listener_register(listener, evtype, err);
     }
-    //dbg!("Called Atspi_listener_register ");
-
-    // do_tow(100, 60);
 
     unsafe {
         atspi_event_main();
     }
-    // dbg!("Called Atspi_main() ");
 
-    /*     if unsafe { atspi_exit() } != 0 {
-                        eprintln!("AT-SPI exit failed.");
-    } */
+    if unsafe { atspi_exit() } != 0 {
+        eprintln!("AT-SPI exit failed.");
+    }
 }
