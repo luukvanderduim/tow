@@ -30,13 +30,15 @@ however it might work with other desktop environments aswell.
 // #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
-// use libxdo_sys::*;  To find pointer co-ordinates
 use daemonize::Daemonize;
-use glib_sys::{GDestroyNotify, GError, GHashTable, GPtrArray};
+//use glib::error::Error;
+//use glib::Quark;
+use glib_sys::{GDestroyNotify, GError ,GHashTable, GPtrArray};
 use gobject_sys::*;
 use gtypes::primitive::{gboolean, gchar, gint, guint};
 use kahan::{KahanSum, KahanSummator};
 use libxdo::XDo;
+use libxdo_sys::*;
 use std::cell::Cell;
 use std::f64::consts::E;
 use std::ffi::CString;
@@ -49,14 +51,16 @@ const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
     counter: i32,
-    first_pos: (i32, i32),
-    last_pos: (i32, i32),
+    pointer_first: (i32, i32),
+    first_glyph_coords: (i32, i32),
+    last_glyph_coords: (i32, i32),
 }
 
 static mut CARET_TOW_STATE: Cell<CaretTowState> = Cell::new(CaretTowState {
     counter: 0,
-    first_pos: (0, 0),
-    last_pos: (0, 0),
+    pointer_first: (0, 0),
+    first_glyph_coords: (0, 0),
+    last_glyph_coords: (0, 0),
 });
 
 /* enum move_style {
@@ -104,62 +108,65 @@ fn get_move_queue() -> Vec<f64> {
 
 // do_move is not tail-recursive! (fixable? / needed?)
 fn do_tow(dx: i32, dy: i32) {
+
+    let xdo = libxdo::XDo::new(None).expect("Failed to obtain XDo handle.");
     let mq = get_move_queue();
-    let xdo = XDo::new(None).expect("Failed to grab libXDo handle.");
-    //do_move(xdo, mq, dx, dy, 0.0, 0.0);
+   // do_move(xdo, mq, dx, dy, 0.0);
+
     xdo.move_mouse_relative(dx, dy).expect("Failed to move!");
+/*     unsafe {
+        xdo.move_mouse(
+            CARET_TOW_STATE.get().last_glyph_coords.0,
+            CARET_TOW_STATE.get().last_glyph_coords.1,
+            0,
+        )
+    }; */
 }
-fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64, cy: f64) {
+fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64) {
     if !qu.is_empty() {
-        let move_amount: f64;
+        let xmove_amount: f64;
         let y_as_xfraction: f64 = dy as f64 / dx as f64;
 
         if let Some(value) = qu.first() {
-            move_amount = value * dx as f64 + cx; // cx times value?
+            xmove_amount = value * dx as f64 + cx;
             qu.remove(0);
         } else {
-            println!("Wonderous machine!! do_tow failed in calculating move");
+            eprintln!("Wonderous machine!! do_tow failed in calculating move");
             return;
         }
 
-        if move_amount < 1.0 {
-            // dbg!("do move!");
-            do_move(xdo, qu, dx, dy, move_amount, move_amount * y_as_xfraction);
+        if xmove_amount < 1.0 {
+            do_move(xdo, qu, dx, dy, xmove_amount);
         } else {
-            let amount_y: i32 = (move_amount * y_as_xfraction.trunc()) as i32;
-
-            xdo.move_mouse_relative(move_amount.trunc() as i32, amount_y)
+            let amount_y: i32 = (xmove_amount * y_as_xfraction).trunc() as i32;
+            xdo.move_mouse_relative(xmove_amount.trunc() as i32, amount_y)
                 .expect("Failed to move!");
-            dx -= move_amount.trunc() as i32;
+            dx -= xmove_amount.trunc() as i32;
             dy -= amount_y;
-            do_move(
-                xdo,
-                qu,
-                dx,
-                dy,
-                move_amount.fract(),
-                move_amount * y_as_xfraction.fract(),
-            );
+            do_move(xdo, qu, dx, dy, xmove_amount.trunc());
             std::thread::sleep(FRAME_DUR);
         }
     }
 }
 
 // Disabled due to XDo from XDotool and XDo from -sys
-/* fn get_pointer_coordinates(handle: XDo) -> (i32, i32) {
+fn get_pointer_coordinates(handle: libxdo_sys::Struct_xdo) -> (i32, i32) {
     let mut mouse_x = Vec::with_capacity(1 as usize);
     let pmouse_x = mouse_x.as_mut_ptr();
     let mut mouse_y = Vec::with_capacity(1 as usize);
     let pmouse_y = mouse_y.as_mut_ptr();
 
-    let p_xdo = &handle as *const i32 as *const csize_t;
-
     unsafe {
-        xdo_get_mouse_location(p_xdo, pmouse_x, pmouse_y, 0 as *mut ::libc::c_int);
+        xdo_get_mouse_location(
+            &handle as *const xdo_t,
+            pmouse_x,
+            pmouse_y,
+            0 as *mut ::libc::c_int,
+        );
     }
     // FIXME: Check for return != 0
-    return (*pmouse_x as i32, *pmouse_y as i32);
-} */
+    return unsafe { (*pmouse_x as i32, *pmouse_y as i32) };
+}
 
 // ================= Foreign Types
 type AtspiCache = u32;
@@ -252,6 +259,7 @@ type guintptr = ::std::os::raw::c_ulong;
 type GPid = ::std::os::raw::c_int;
 
 type GQuark = guint32;
+type gpointer = *mut ::std::os::raw::c_void;
 
 //=========== End foreign types
 //=========== Foreign Functions
@@ -283,6 +291,13 @@ extern "C" {
         callback_destroyed: GDestroyNotify,
     ) -> *mut AtspiEventListener;
 
+    fn atspi_event_listener_new(
+        callback: AtspiEventListenerCB,
+        user_data: gpointer,
+        callback_destroyed: GDestroyNotify,
+    ) -> *mut AtspiEventListener;
+
+
     fn atspi_event_listener_register(
         listener: *mut AtspiEventListener,
         event_type: *const gchar,
@@ -296,11 +311,19 @@ extern "C" {
         error: *mut *mut GError,
     ) -> gboolean;
 
+
+
 }
 //=========== End foreign functions
 
-extern "C" fn on_caret_move(event: *const AtspiEvent) {
+extern fn destroy_evgarbage(data: gpointer) {
+    // unsafe { libc::free(data) };
+    return;
+}
+
+extern fn on_caret_move(event: *mut AtspiEvent, voidpxdosys: *mut ::std::os::raw::c_void) {
     use std::ptr::null_mut;
+
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     let mut caret_offset: gtypes::gint =
         unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
@@ -310,13 +333,10 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
         return;
     }
 
-    // println!("Caret offset: {:?}", caret_offset);
-
-    /*   Because we cannot ask for the co-ordinates of the caret directly,
-                                    we ask for the bounding box of the glyph at the position one before the carets.
-                                    (often there will not be a glyph at the carets position and we'll have more
-    chance finding one at the preceding position) */
-
+    // Because we cannot ask for the co-ordinates of the caret directly,
+    // we ask for the bounding box of the glyph at the position one before the carets.
+    // (often there will not be a glyph at the carets position and we'll have more
+    // chance finding one at the preceding position) */
     let glyph_extents = unsafe {
         atspi_text_get_character_extents(
             text_iface,
@@ -329,39 +349,70 @@ extern "C" fn on_caret_move(event: *const AtspiEvent) {
 
     // Often atspi_text_get_character_extents() seems to return twice:
     // Once with a valid value and once, supposedly at the origin of the screen
+    // Some applications suffer from this, others dont. (Bluefish doesnt, xed does)
     // Until the cause is found and fixed, filter these.
-    if unsafe { ((*glyph_extents).x == 0) && ((*glyph_extents).y == 0) } {
+
+    let caret_coords_now: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
+    if caret_coords_now == (0, 0) {
         return;
     }
 
-    let tup: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
-    let mut current_cts = unsafe { CARET_TOW_STATE.get() };
 
-    match current_cts.counter {
+
+    // Counting events and 'move per ten'is fine as stategy until:
+    // - somewhere between 0and 10 the mouse pointer has changed location
+    // and therefore our view port.
+
+    // get called with the handler, avoid grabbing it over and over
+    let pxdosys = voidpxdosys as *mut xdo_t;
+    assert!(!pxdosys.is_null());
+    let xdosys = unsafe { &*pxdosys };
+    // current CaretTowState
+    let mut curr_cts = unsafe { CARET_TOW_STATE.get() };
+
+    match curr_cts.counter {
         0 => {
-            current_cts.counter += 1;
-            current_cts.first_pos = tup;
-            current_cts.last_pos = tup;
-            unsafe { CARET_TOW_STATE.replace(current_cts) };
+            println!("match 0, counter: {:?}", curr_cts.counter);
+            curr_cts.counter += 1;
+            curr_cts.pointer_first = get_pointer_coordinates(*xdosys);
+            curr_cts.first_glyph_coords = caret_coords_now;
+            curr_cts.last_glyph_coords = caret_coords_now;
+            unsafe { CARET_TOW_STATE.replace(curr_cts) };
         }
         1..=9 => {
-            current_cts.counter += 1;
-            current_cts.last_pos = tup;
-            unsafe { CARET_TOW_STATE.replace(current_cts) };
+            println!("match 1..=9, counter: {:?}", curr_cts.counter);
+            if curr_cts.pointer_first != get_pointer_coordinates(*xdosys) {
+                curr_cts.counter = 0;
+                unsafe { CARET_TOW_STATE.replace(curr_cts) };
+                unsafe {libxdo_sys::xdo_free(pxdosys)};
+                return;
+            }
+            curr_cts.counter += 1;
+            curr_cts.last_glyph_coords = caret_coords_now;
+            unsafe { CARET_TOW_STATE.replace(curr_cts) };
         }
         10 => {
-            current_cts.last_pos = tup;
-            let dx: i32 = current_cts.last_pos.0 - current_cts.first_pos.0;
-            let dy: i32 = current_cts.last_pos.1 - current_cts.first_pos.1;
-            current_cts.counter = 0;
-            current_cts.first_pos = (0, 0);
-            unsafe { CARET_TOW_STATE.replace(current_cts) };
+            println!("match 10, counter: {:?}", curr_cts.counter);
+            if curr_cts.pointer_first != get_pointer_coordinates(*xdosys) {
+                dbg!(curr_cts.counter = 0);
+                unsafe { CARET_TOW_STATE.replace(curr_cts) };
+                unsafe {libxdo_sys::xdo_free(pxdosys)};
+                return;
+            }
+            let dx: i32 = curr_cts.last_glyph_coords.0 - curr_cts.first_glyph_coords.0;
+            let dy: i32 = curr_cts.last_glyph_coords.1 - curr_cts.first_glyph_coords.1;
+            curr_cts.counter = 0;
+            unsafe { CARET_TOW_STATE.replace(curr_cts) };
             do_tow(dx, dy);
         }
         _ => {
             unreachable!();
         }
     };
+    unsafe {
+    //libxdo_sys::xdo_free(pxdosys);
+
+    }
 }
 
 fn spookify_tow() {
@@ -383,26 +434,38 @@ fn spookify_tow() {
 }
 
 fn main() {
-    spookify_tow();
+    // spookify_tow();
 
-    let evfn: AtspiEventListenerSimpleCB = Some(on_caret_move);
-    let yoghurt: GQuark = 2651;
-    let ptr = CString::new("").expect("CString::new failed").as_ptr();
+    // xdosys pointer
+    let pxdosys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
+    assert!(!pxdosys.is_null());
+    let voidpxdosys = pxdosys as *mut std::os::raw::c_void;
 
-    let towerror = unsafe { glib_sys::g_error_new(yoghurt, 0, ptr) };
+    let evfn: AtspiEventListenerCB = Some(on_caret_move);
+    let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
 
-    // AT-SPI event listeners
-    let listener = unsafe { atspi_event_listener_new_simple(evfn, None) };
-    // FIX: introduce proper error handling please
+    let yoghurt: GQuark = 2651; // This is bogus!! FIXME!
+    let ptr = CString::new("").expect("CString::new failed").as_ptr(); // This too is bogus!! FIXME!
+
+    let towerror = unsafe { glib_sys::g_error_new(yoghurt, 0, ptr) }; // Also bogus
+    assert!(!towerror.is_null());
+
+
+    // AT-SPI event listener VANILLA
+    let listener = unsafe { atspi_event_listener_new(evfn, voidpxdosys, evdestroygarb) };
+
 
     // AT-SPI init
     if unsafe { atspi_init() } != 0 {
-        eprintln!("Could not initialise AT-SPI.");
+        panic!("Could not initialise AT-SPI.");
     }
 
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
         .into_raw() as *const i8;
+
+    assert!(!evtype.is_null());
+
     let err: *mut *mut GError = std::ptr::null_mut();
 
     unsafe {
