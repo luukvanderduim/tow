@@ -68,7 +68,7 @@ impl CaretTowState {
 #[derive(Clone, Debug)]
 struct SharedCoupled {
     curr_cts: Arc<Mutex<CaretTowState>>,
-    vp: *mut std::os::raw::c_void,
+    xdo_ptr: *mut libxdo_sys::Struct_xdo,
 }
 
 /* enum move_style {
@@ -173,7 +173,6 @@ fn get_pointer_coordinates(handle: libxdo_sys::Struct_xdo) -> (i32, i32) {
     debug_assert!(!pmouse_x.is_null());
     debug_assert!(!pmouse_y.is_null());
 
-    // FIXME free both pointers before return
     let x: i32 = unsafe { *pmouse_x as i32 };
     let y: i32 = unsafe { *pmouse_y as i32 };
 
@@ -343,6 +342,10 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     /* 'Detail1' is likely the mask of event(s) we registered for (?) */
     if unsafe { ((*event).detail1 == 0) } {
+        unsafe {
+            gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+            gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+        }
         return;
     }
 
@@ -367,31 +370,48 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     let caret_coords_now: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
     if caret_coords_now == (0, 0) {
+        unsafe {
+            gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+            gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+            gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+        }
         return;
     }
 
     // Counting events and 'move per ten'is fine as stategy until:
-    // - somewhere between 0and 10 the mouse pointer has changed location
-    // and therefore our view port.
+    // - somewhere between 0and 10 the mouse pointer is moved
+    // and with it our view port.
 
-    let vpxdo_sys = coupled.vp;
     // get called with the handler, avoid grabbing it over and over
-    let pxdo_sys = vpxdo_sys as *mut xdo_t;
+    let pxdo_sys = coupled.xdo_ptr;
     assert!(!pxdo_sys.is_null());
     let xdosys = unsafe { &*pxdo_sys }; //xdosys is a Rusty reference
 
     // current CaretTowState
-    let mut curr_cts = coupled.curr_cts;
+    let mut curr_cts = coupled.curr_cts.clone();
 
     match curr_cts.lock().unwrap().counter {
         0 => {
             println!("match 0, counter: {:?}", curr_cts.lock().unwrap().counter);
-            curr_cts.lock().unwrap().counter += 1;
-            curr_cts.lock().unwrap().pointer_first = get_pointer_coordinates(*xdosys);
-            curr_cts.lock().unwrap().first_glyph_coords = caret_coords_now;
-            curr_cts.lock().unwrap().last_glyph_coords = caret_coords_now;
+            curr_cts.lock().expect("No luck with lock").counter += 1;
+            curr_cts.lock().expect("No luck with lock").pointer_first =
+                get_pointer_coordinates(*xdosys);
+            curr_cts
+                .lock()
+                .expect("No luck with lock")
+                .first_glyph_coords = caret_coords_now;
+            curr_cts
+                .lock()
+                .expect("No luck with lock")
+                .last_glyph_coords = caret_coords_now;
+            dbg!("made it past 0");
 
-            unsafe { libxdo_sys::xdo_free(pxdo_sys) };
+            unsafe {
+                gobject_sys::g_object_unref(pxdo_sys as *mut gobject_sys::GObject);
+                gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+                gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+                gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+            }
             return;
         }
         1..=9 => {
@@ -403,12 +423,24 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
                 curr_cts.lock().unwrap().reset();
 
                 unsafe { libxdo_sys::xdo_free(pxdo_sys) };
+                unsafe {
+                    gobject_sys::g_object_unref(pxdo_sys as *mut gobject_sys::GObject);
+                    gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+                    gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+                    gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+                }
                 return;
             }
             curr_cts.lock().unwrap().counter += 1;
             curr_cts.lock().unwrap().last_glyph_coords = caret_coords_now;
 
             unsafe { libxdo_sys::xdo_free(pxdo_sys) };
+            unsafe {
+                gobject_sys::g_object_unref(pxdo_sys as *mut gobject_sys::GObject);
+                gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+                gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+                gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+            }
             return;
         }
         _ => {
@@ -417,6 +449,12 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
                 curr_cts.lock().unwrap().reset();
 
                 unsafe { libxdo_sys::xdo_free(pxdo_sys) };
+                unsafe {
+                    gobject_sys::g_object_unref(pxdo_sys as *mut gobject_sys::GObject);
+                    gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+                    gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+                    gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+                }
                 return;
             }
             let dx: i32 = curr_cts.lock().unwrap().last_glyph_coords.0
@@ -428,12 +466,12 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             do_tow(dx, dy);
         }
     };
-
-    /*     unsafe {
-                    libxdo_sys::xdo_free(pxdo_sys);
-
-
-    } */
+    unsafe {
+        gobject_sys::g_object_unref(pxdo_sys as *mut gobject_sys::GObject);
+        gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+        gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+        gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
+    }
 }
 
 fn spookify_tow() {
@@ -468,12 +506,11 @@ fn main() {
     // xdo_sys pointer
     let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
     debug_assert!(!pxdo_sys.is_null());
-    let vpxdo_sys = pxdo_sys as *mut std::os::raw::c_void;
 
     // One argument for two pieces of data.
     let data: Box<SharedCoupled> = Box::new(SharedCoupled {
-        curr_cts: cts.clone(),
-        vp: vpxdo_sys,
+        curr_cts: cts,
+        xdo_ptr: pxdo_sys,
     });
     let vpdata = Box::into_raw(data) as *mut libc::c_void;
 
