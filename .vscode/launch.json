@@ -5,6 +5,13 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "type": "gdb",
+            "request": "launch",
+            "name": "tow",
+            "target": "./target/debug/tow",
+            "cwd": "${workspaceRoot}"
+        },
+        {
             "type": "lldb",
             "request": "launch",
             "sourceLanguages": [
@@ -13,7 +20,7 @@
             "name": "Debug",
             "program": "${workspaceRoot}/target/debug/tow",
             //"program": "${workspaceRoot}/target/debug/${workspaceRootFolderName}",
-            //"program": "/home/luuk/src/rust/tow/debug/tow",
+            //"program": "/home/luuk/src/rust/tow/target/debug/tow",
             "args": [],
             "cwd": "${workspaceRoot}"
         }
