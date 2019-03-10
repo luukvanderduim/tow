@@ -331,7 +331,13 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     // coupled: Box<<(Arc<Mutex<CaretTowState>>, *mut libxdo_sys::Struct_xdo)>>
     let coupled = unsafe {
-        Box::from_raw(vpdata as *mut Box<(Arc<Mutex<CaretTowState>>, *mut libxdo_sys::Struct_xdo)>)
+        Box::from_raw(
+            vpdata
+                as *mut Box<(
+                    Arc<Mutex<CaretTowState>>,
+                    Arc<Mutex<*mut libxdo_sys::Struct_xdo>>,
+                )>,
+        )
     };
 
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
@@ -377,30 +383,26 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
         return;
     }
 
-    // Counting events and 'move per ten'is fine as stategy until:
+    // 'Move per ten events'is fine as stategy until:
     // - somewhere between 0and 10 the mouse pointer is moved
     // and with it our view port.
 
-    // Split data in two
-    let pxdo_sys = (**coupled).1; // pxdo_sys is cleaned up with GDestroyNotify(?)
-    let mut curr_cts = (**coupled).0.clone();
-    let pointer_coordinates = unsafe { get_pointer_coordinates(*pxdo_sys) };
+    // Split data tuple in its constituents
+    let c_cts_curr = (*coupled).0.clone();
+    let c_pxdo_sys = (*coupled).1.clone(); // pxdo_sys is cleaned up with GDestroyNotify(?)
 
-    match curr_cts.lock().unwrap().counter {
+    let mut pxdo_sys = c_pxdo_sys.lock().unwrap();
+    let mut curr_cts = c_cts_curr.lock().unwrap();
+
+    let pointer_coordinates = unsafe { get_pointer_coordinates(**pxdo_sys) };
+
+    match (*curr_cts).counter {
         0 => {
-            println!("match 0, counter: {:?}", curr_cts.lock().unwrap().counter);
-            curr_cts.lock().expect("No luck with lock").counter += 1;
-            curr_cts.lock().expect("No luck with lock").pointer_first = pointer_coordinates;
-            curr_cts
-                .lock()
-                .expect("No luck with lock")
-                .first_glyph_coords = caret_coords_now;
-            curr_cts
-                .lock()
-                .expect("No luck with lock")
-                .last_glyph_coords = caret_coords_now;
-            dbg!("made it past 0");
-
+            println!("match 0, counter: {:?}", (*curr_cts).counter);
+            (*curr_cts).counter += 1;
+            (*curr_cts).pointer_first = pointer_coordinates;
+            (*curr_cts).first_glyph_coords = caret_coords_now;
+            (*curr_cts).last_glyph_coords = caret_coords_now;
             unsafe {
                 gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
                 gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
@@ -409,13 +411,9 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             return;
         }
         1..=9 => {
-            println!(
-                "match 1..=9, counter: {:?}",
-                curr_cts.lock().unwrap().counter
-            );
-            if curr_cts.lock().unwrap().pointer_first != pointer_coordinates {
-                curr_cts.lock().unwrap().reset();
-
+            println!("match 1..=9, counter: {:?}", (*curr_cts).counter);
+            if (*curr_cts).pointer_first != pointer_coordinates {
+                (*curr_cts).reset();
                 unsafe {
                     gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
                     gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
@@ -423,8 +421,8 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
                 }
                 return;
             }
-            curr_cts.lock().unwrap().counter += 1;
-            curr_cts.lock().unwrap().last_glyph_coords = caret_coords_now;
+            (*curr_cts).counter += 1;
+            (*curr_cts).last_glyph_coords = caret_coords_now;
 
             unsafe {
                 gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
@@ -434,9 +432,9 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             return;
         }
         _ => {
-            println!("match 10, counter: {:?}", curr_cts.lock().unwrap().counter);
-            if curr_cts.lock().unwrap().pointer_first != pointer_coordinates {
-                curr_cts.lock().unwrap().reset();
+            println!("match 10, counter: {:?}", (*curr_cts).counter);
+            if (*curr_cts).pointer_first != pointer_coordinates {
+                (*curr_cts).reset();
                 unsafe {
                     gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
                     gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
@@ -444,11 +442,9 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
                 }
                 return;
             }
-            let dx: i32 = curr_cts.lock().unwrap().last_glyph_coords.0
-                - curr_cts.lock().unwrap().first_glyph_coords.0;
-            let dy: i32 = curr_cts.lock().unwrap().last_glyph_coords.1
-                - curr_cts.lock().unwrap().first_glyph_coords.1;
-            curr_cts.lock().unwrap().reset();
+            let dx: i32 = (*curr_cts).last_glyph_coords.0 - (*curr_cts).first_glyph_coords.0;
+            let dy: i32 = (*curr_cts).last_glyph_coords.1 - (*curr_cts).first_glyph_coords.1;
+            (*curr_cts).reset();
 
             do_tow(dx, dy);
         }
@@ -490,12 +486,12 @@ fn main() {
     }));
 
     // xdo_sys pointer
-    let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
-    debug_assert!(!pxdo_sys.is_null());
+    let xdo_sys_ptr = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
+    debug_assert!(!xdo_sys_ptr.is_null());
+    let pxdo_sys = Arc::new(Mutex::new(xdo_sys_ptr));
 
     // Two into one arg.
-    let data: Box<(Arc<Mutex<CaretTowState>>, *mut libxdo_sys::Struct_xdo)> =
-        Box::new((cts, pxdo_sys));
+    let data = Box::new((cts, pxdo_sys));
     let vpdata = Box::into_raw(data) as *mut libc::c_void;
 
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
@@ -515,7 +511,9 @@ fn main() {
 
     let err: *mut *mut GError = std::ptr::null_mut(); //Must do better
 
-    unsafe { atspi_event_listener_register(listener, evtype, err) };
+    unsafe {
+        atspi_event_listener_register(listener, evtype, err);
+    }
     unsafe {
         atspi_event_main();
     }
