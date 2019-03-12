@@ -23,11 +23,10 @@ tow has the zoom area be 'towed by the keyboard caret'.
 It is made with the Xfce4 desktop in mind,
 however it might work with other desktop environments aswell.
 */
-//#![warn(clippy)#![warn(clippy)]
-
+// #![warn(clippy::all)]
 #![feature(duration_as_u128)]
 #![feature(extern_types)]
-// #![allow(unused_imports)]
+#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 use daemonize::Daemonize;
@@ -64,6 +63,8 @@ impl CaretTowState {
         self.last_glyph_coords = (0, 0);
     }
 }
+
+type Duet<'a> = (CaretTowState, *mut libxdo_sys::Struct_xdo);
 
 /* enum move_style {
     sigmoid,
@@ -329,24 +330,19 @@ extern "C" fn destroy_evgarbage(data: gpointer) {
 extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw::c_void) {
     use std::ptr::null_mut;
 
-    // coupled: Box<<(Arc<Mutex<CaretTowState>>, *mut libxdo_sys::Struct_xdo)>>
-    let coupled = unsafe {
-        Box::from_raw(
-            vpdata
-                as *mut Box<(
-                    Arc<Mutex<CaretTowState>>,
-                    Arc<Mutex<*mut libxdo_sys::Struct_xdo>>,
-                )>,
-        )
-    };
+    // coupled: &mut [(Arc<Mutex<CaretTowState>>, Arc<Mutex<*mut libxdo_sys::Struct_xdo>>); 1]
+
+    let pdata = unsafe { vpdata as *mut Duet };
+    let data = unsafe { *pdata };
 
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     assert!(!text_iface.is_null());
 
     let mut caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
-    /* 'Detail1' is likely the mask of event(s) we registered for (?) */
-    if unsafe { ((*event).detail1 == 0) } {
+    // 'Detail1' is likely the mask of event(s) we registered for (?)
+    // Problem is that it is undocumented.
+    if unsafe { dbg!(((*event).detail1 == 0)) } {
         unsafe {
             gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
@@ -356,8 +352,8 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     // Because we cannot ask for the co-ordinates of the caret directly,
     // we ask for the bounding box of the glyph at the position one before the carets.
-    // (often there will not be a glyph at the carets position and we'll have more
-    // chance finding one at the preceding position) */
+    // (often there will not be a glyph at the carets position and we'll have better
+    // chances at the preceding position) */
     let glyph_extents = unsafe {
         atspi_text_get_character_extents(
             text_iface,
@@ -374,7 +370,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // Until the cause is found and fixed, filter these.
 
     let caret_coords_now: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
-    if caret_coords_now == (0, 0) {
+    if dbg!(caret_coords_now == (0, 0)) {
         unsafe {
             gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
@@ -384,76 +380,43 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     }
 
     // 'Move per ten events'is fine as stategy until:
-    // - somewhere between 0and 10 the mouse pointer is moved
+    // - somewhere between 0..10 the mouse pointer is moved
     // and with it our view port.
 
-    // Split data tuple in its constituents
-    let c_cts_curr = (*coupled).0.clone();
-    let c_pxdo_sys = (*coupled).1.clone(); // pxdo_sys is cleaned up with GDestroyNotify(?)
+    let (mut cts_curr, pxdo_sys) = data;
+    let pointer_coordinates = unsafe { get_pointer_coordinates(*pxdo_sys) };
 
-    let mut pxdo_sys = c_pxdo_sys.lock().unwrap();
-    let mut curr_cts = c_cts_curr.lock().unwrap();
-
-    let pointer_coordinates = unsafe { get_pointer_coordinates(**pxdo_sys) };
-
-    match (*curr_cts).counter {
+    match dbg!((cts_curr).counter) {
         0 => {
-            println!("match 0, counter: {:?}", (*curr_cts).counter);
-            (*curr_cts).counter += 1;
-            (*curr_cts).pointer_first = pointer_coordinates;
-            (*curr_cts).first_glyph_coords = caret_coords_now;
-            (*curr_cts).last_glyph_coords = caret_coords_now;
-            unsafe {
-                gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-                gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
-                gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-            }
-            return;
+            cts_curr.counter += 1;
+            cts_curr.pointer_first = pointer_coordinates;
+            cts_curr.first_glyph_coords = caret_coords_now;
+            cts_curr.last_glyph_coords = caret_coords_now;
         }
         1..=9 => {
-            println!("match 1..=9, counter: {:?}", (*curr_cts).counter);
-            if (*curr_cts).pointer_first != pointer_coordinates {
-                (*curr_cts).reset();
-                unsafe {
-                    gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-                    gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
-                    gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-                }
-                return;
+            if dbg!((cts_curr).pointer_first != pointer_coordinates) {
+                cts_curr.reset();
+            } else {
+                cts_curr.counter += 1;
+                cts_curr.last_glyph_coords = caret_coords_now;
             }
-            (*curr_cts).counter += 1;
-            (*curr_cts).last_glyph_coords = caret_coords_now;
-
-            unsafe {
-                gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-                gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
-                gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-            }
-            return;
         }
         _ => {
-            println!("match 10, counter: {:?}", (*curr_cts).counter);
-            if (*curr_cts).pointer_first != pointer_coordinates {
-                (*curr_cts).reset();
-                unsafe {
-                    gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-                    gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
-                    gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-                }
-                return;
+            if dbg!((cts_curr).pointer_first != pointer_coordinates) {
+                cts_curr.reset();
+            } else {
+                let dx: i32 = (cts_curr).last_glyph_coords.0 - (cts_curr).first_glyph_coords.0;
+                let dy: i32 = (cts_curr).last_glyph_coords.1 - (cts_curr).first_glyph_coords.1;
+                (cts_curr).reset();
+                //do_tow(dx, dy);
             }
-            let dx: i32 = (*curr_cts).last_glyph_coords.0 - (*curr_cts).first_glyph_coords.0;
-            let dy: i32 = (*curr_cts).last_glyph_coords.1 - (*curr_cts).first_glyph_coords.1;
-            (*curr_cts).reset();
-
-            do_tow(dx, dy);
         }
     };
-    unsafe {
+    /*     unsafe {
         gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
         gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
         gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-    }
+    } */
 }
 
 fn spookify_tow() {
@@ -476,23 +439,22 @@ fn spookify_tow() {
 
 fn main() {
     // spookify_tow();
-
     // Shared state between CBs
-    let mut cts: Arc<Mutex<CaretTowState>> = Arc::new(Mutex::new(CaretTowState {
+    let mut cts: CaretTowState = CaretTowState {
         counter: 0,
         pointer_first: (0, 0),
         first_glyph_coords: (0, 0),
         last_glyph_coords: (0, 0),
-    }));
+    };
 
     // xdo_sys pointer
-    let xdo_sys_ptr = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
-    debug_assert!(!xdo_sys_ptr.is_null());
-    let pxdo_sys = Arc::new(Mutex::new(xdo_sys_ptr));
+    let mut pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
+    debug_assert!(!pxdo_sys.is_null());
 
-    // Two into one arg.
-    let data = Box::new((cts, pxdo_sys));
-    let vpdata = Box::into_raw(data) as *mut libc::c_void;
+    let mut data: Duet<'static> = (cts, pxdo_sys);
+    let vpdata = &mut data as *mut Duet as *mut libc::c_void;
+
+    //let vpdata = (&mut [(cts, pxdo_sys)]).as_mut_ptr() as *mut libc::c_void; // Two into one arg.
 
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
     let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
