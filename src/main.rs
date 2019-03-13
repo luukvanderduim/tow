@@ -44,6 +44,8 @@ use std::ffi::CString;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use xcb::base::Connection;
+use xcb;
 
 const SLIDE_DUR: Duration = Duration::from_micros(1_000_000);
 const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
@@ -109,7 +111,6 @@ fn get_move_queue() -> Vec<f64> {
     queue
 }
 
-// do_move is not tail-recursive! (fixable? / needed?)
 fn do_tow(dx: i32, dy: i32) {
     let xdo = libxdo::XDo::new(None).expect("Failed to obtain XDo handle.");
     let mq = get_move_queue();
@@ -151,36 +152,25 @@ fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64) {
     }
 }
 
-fn get_pointer_coordinates(handle: libxdo_sys::Struct_xdo) -> (i32, i32) {
-    let mut mouse_x = Vec::with_capacity(1 as usize);
-    let pmouse_x = mouse_x.as_mut_ptr();
-    let mut mouse_y = Vec::with_capacity(1 as usize);
-    let pmouse_y = mouse_y.as_mut_ptr();
+fn get_pointer_coordinates() -> (i32, i32) {
+    let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
+    let setup = conn.get_setup();
+    let screen = setup.roots().nth(screen_num as usize).unwrap();
+    let root_id = screen.root();
 
-    unsafe {
-        xdo_get_mouse_location(
-            &handle as *const xdo_t,
-            pmouse_x,
-            pmouse_y,
-            0 as *mut ::libc::c_int,
-        );
-    }
-    debug_assert!(!pmouse_x.is_null());
-    debug_assert!(!pmouse_y.is_null());
+    let pointercookie = xcb::xproto::query_pointer(&conn, root_id);
 
-    let x: i32 = unsafe { *pmouse_x as i32 };
-    let y: i32 = unsafe { *pmouse_y as i32 };
-
-    unsafe {
-        libc::free(pmouse_x as *mut std::ffi::c_void);
-        libc::free(pmouse_y as *mut std::ffi::c_void);
-    }
-    (x, y)
+    match pointercookie.get_reply() {
+        Ok(r) => {
+            return (r.root_x() as i32, r.root_y() as i32);
+        }
+        Err(_) => {
+            panic!("could not get coordinates of pointer");
+        }
+    };
 }
 
 // ================= Foreign Types
-type AtspiCache = u32;
-
 type AtspiObject = _AtspiObject;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -251,23 +241,7 @@ struct _AtspiRect {
     width: gint,
     height: gint,
 }
-type AtspiEventListenerSimpleCB =
-    ::std::option::Option<unsafe extern "C" fn(event: *const AtspiEvent)>;
-type gint8 = ::std::os::raw::c_schar;
-type guint8 = ::std::os::raw::c_uchar;
-type gint16 = ::std::os::raw::c_short;
-type guint16 = ::std::os::raw::c_ushort;
-type gint32 = ::std::os::raw::c_int;
 type guint32 = ::std::os::raw::c_uint;
-type gint64 = ::std::os::raw::c_long;
-type guint64 = ::std::os::raw::c_ulong;
-type gssize = ::std::os::raw::c_long;
-type gsize = ::std::os::raw::c_ulong;
-type goffset = gint64;
-type gintptr = ::std::os::raw::c_long;
-type guintptr = ::std::os::raw::c_ulong;
-type GPid = ::std::os::raw::c_int;
-
 type GQuark = guint32;
 type gpointer = *mut ::std::os::raw::c_void;
 
@@ -279,8 +253,6 @@ extern "C" {
     fn atspi_init() -> ::std::os::raw::c_int;
     fn atspi_exit() -> ::std::os::raw::c_int;
     fn atspi_event_main();
-    fn atspi_event_quit();
-    fn atspi_get_desktop_count() -> gint;
 
     //-------- atspi_text
     fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
@@ -296,10 +268,6 @@ extern "C" {
     fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
 
     //------- atsi_event
-    fn atspi_event_listener_new_simple(
-        callback: AtspiEventListenerSimpleCB,
-        callback_destroyed: GDestroyNotify,
-    ) -> *mut AtspiEventListener;
 
     fn atspi_event_listener_new(
         callback: AtspiEventListenerCB,
@@ -309,13 +277,6 @@ extern "C" {
 
     fn atspi_event_listener_register(
         listener: *mut AtspiEventListener,
-        event_type: *const gchar,
-        error: *mut *mut GError,
-    ) -> gboolean;
-
-    fn atspi_event_listener_register_no_data(
-        callback: AtspiEventListenerSimpleCB,
-        callback_destroyed: GDestroyNotify,
         event_type: *const gchar,
         error: *mut *mut GError,
     ) -> gboolean;
@@ -332,7 +293,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     // coupled: &mut [(Arc<Mutex<CaretTowState>>, Arc<Mutex<*mut libxdo_sys::Struct_xdo>>); 1]
 
-    let pdata = unsafe { vpdata as *mut Duet };
+    let pdata = vpdata as *mut Duet;
     let data = unsafe { *pdata };
 
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
@@ -342,7 +303,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     // 'Detail1' is likely the mask of event(s) we registered for (?)
     // Problem is that it is undocumented.
-    if unsafe { dbg!(((*event).detail1 == 0)) } {
+    if unsafe { dbg!((*event).detail1 == 0) } {
         unsafe {
             gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
@@ -384,7 +345,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // and with it our view port.
 
     let (mut cts_curr, pxdo_sys) = data;
-    let pointer_coordinates = unsafe { get_pointer_coordinates(*pxdo_sys) };
+    let pointer_coordinates = get_pointer_coordinates();
 
     match dbg!((cts_curr).counter) {
         0 => {
@@ -412,11 +373,11 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             }
         }
     };
-    /*     unsafe {
-        gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-        gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
+    unsafe {
+        //  gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
+        // gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
         gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-    } */
+    }
 }
 
 fn spookify_tow() {
@@ -440,7 +401,7 @@ fn spookify_tow() {
 fn main() {
     // spookify_tow();
     // Shared state between CBs
-    let mut cts: CaretTowState = CaretTowState {
+    let cts: CaretTowState = CaretTowState {
         counter: 0,
         pointer_first: (0, 0),
         first_glyph_coords: (0, 0),
@@ -448,14 +409,11 @@ fn main() {
     };
 
     // xdo_sys pointer
-    let mut pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
+    let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
     debug_assert!(!pxdo_sys.is_null());
 
     let mut data: Duet<'static> = (cts, pxdo_sys);
     let vpdata = &mut data as *mut Duet as *mut libc::c_void;
-
-    //let vpdata = (&mut [(cts, pxdo_sys)]).as_mut_ptr() as *mut libc::c_void; // Two into one arg.
-
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
     let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
 

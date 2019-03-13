@@ -16,4 +16,6 @@ time = "0.1"
 kahan = "0.1"
 glib = "0.7"
 gtypes = "0.2.0"
+xcb = "0.8.2"
+lazy_static = "1.3"
 
