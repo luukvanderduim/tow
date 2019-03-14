@@ -38,14 +38,13 @@ use gobject_sys::*;
 use gtypes::primitive::{gboolean, gchar, gint, guint};
 use kahan::{KahanSum, KahanSummator};
 use libxdo::XDo;
-use libxdo_sys::*;
 use std::f64::consts::E;
 use std::ffi::CString;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use xcb::base::Connection;
 use xcb;
+use xcb::base::Connection;
 
 const SLIDE_DUR: Duration = Duration::from_micros(1_000_000);
 const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
@@ -64,9 +63,13 @@ impl CaretTowState {
         self.first_glyph_coords = (0, 0);
         self.last_glyph_coords = (0, 0);
     }
+    fn advance(&mut self, l: (i32, i32)) {
+        self.counter += 1;
+        self.last_glyph_coords = l;
+    }
 }
 
-type Duet<'a> = (CaretTowState, *mut libxdo_sys::Struct_xdo);
+type Duet<'a> = (&'a mut CaretTowState, *mut libxdo_sys::Struct_xdo);
 
 /* enum move_style {
     sigmoid,
@@ -99,6 +102,7 @@ fn get_sigmoid() -> Vec<f64> {
 fn get_move_queue() -> Vec<f64> {
     let mut halfqueue = get_sigmoid().clone();
     let mut queue: Vec<f64> = get_sigmoid().clone();
+
     // Add halfqueue to queue in reversed order.
     // queue -> slope up /\ slope down
     while !halfqueue.is_empty() {
@@ -114,16 +118,9 @@ fn get_move_queue() -> Vec<f64> {
 fn do_tow(dx: i32, dy: i32) {
     let xdo = libxdo::XDo::new(None).expect("Failed to obtain XDo handle.");
     let mq = get_move_queue();
-    // do_move(xdo, mq, dx, dy, 0.0);
+    do_move(xdo, mq, dx, dy, 0.0);
 
-    xdo.move_mouse_relative(dx, dy).expect("Failed to move!");
-    /*     unsafe {
-        xdo.move_mouse(
-            CARET_TOW_STATE.get().last_glyph_coords.0,
-            CARET_TOW_STATE.get().last_glyph_coords.1,
-            0,
-        )
-    }; */
+    // xdo.move_mouse_relative(dx, dy).expect("Failed to move!");
 }
 fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64) {
     if !qu.is_empty() {
@@ -264,7 +261,6 @@ extern "C" {
     ) -> *mut AtspiRect;
 
     //------- atspi_accessible
-    fn atspi_accessible_get_text(obj: *mut AtspiAccessible) -> *mut AtspiText;
     fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
 
     //------- atsi_event
@@ -291,10 +287,14 @@ extern "C" fn destroy_evgarbage(data: gpointer) {
 extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw::c_void) {
     use std::ptr::null_mut;
 
-    // coupled: &mut [(Arc<Mutex<CaretTowState>>, Arc<Mutex<*mut libxdo_sys::Struct_xdo>>); 1]
-
+    // We can convert the pointer-type of vpdate
+    // but cannot dereference
+    // due to violation of the borrowed nature of its contents.
+    // (ihope-iiuc)
+    // "Can't eat a lent cake"-error
+    // We can however make the raw into a normal &mut
     let pdata = vpdata as *mut Duet;
-    let data = unsafe { *pdata };
+    let data = unsafe { &mut *pdata };
 
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     assert!(!text_iface.is_null());
@@ -303,11 +303,12 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     // 'Detail1' is likely the mask of event(s) we registered for (?)
     // Problem is that it is undocumented.
-    if unsafe { dbg!((*event).detail1 == 0) } {
-        unsafe {
+    if unsafe { (*event).detail1 == 0 } {
+        /*  unsafe {
             gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-        }
+        } */
+        // Apparently above freeing is wrong or unneeded?!
         return;
     }
 
@@ -331,12 +332,14 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // Until the cause is found and fixed, filter these.
 
     let caret_coords_now: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
-    if dbg!(caret_coords_now == (0, 0)) {
-        unsafe {
+
+    if caret_coords_now == (0, 0) {
+        /*     unsafe {
             gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
             gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-        }
+        } */
+        // Cleaning up does noet seem to work like this .. Causes segfault.
         return;
     }
 
@@ -344,10 +347,13 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // - somewhere between 0..10 the mouse pointer is moved
     // and with it our view port.
 
-    let (mut cts_curr, pxdo_sys) = data;
+    // Rust will assure we'll never consume my borrowed cts: cts_curr
+    // We end up with a '&mut &mut', Maybe make a single &mut?
+    let (cts_curr, pxdo_sys) = data;
+
     let pointer_coordinates = get_pointer_coordinates();
 
-    match dbg!((cts_curr).counter) {
+    match cts_curr.counter {
         0 => {
             cts_curr.counter += 1;
             cts_curr.pointer_first = pointer_coordinates;
@@ -355,29 +361,23 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             cts_curr.last_glyph_coords = caret_coords_now;
         }
         1..=9 => {
-            if dbg!((cts_curr).pointer_first != pointer_coordinates) {
+            if cts_curr.pointer_first != pointer_coordinates {
                 cts_curr.reset();
             } else {
-                cts_curr.counter += 1;
-                cts_curr.last_glyph_coords = caret_coords_now;
+                cts_curr.advance(caret_coords_now);
             }
         }
         _ => {
-            if dbg!((cts_curr).pointer_first != pointer_coordinates) {
+            if cts_curr.pointer_first != pointer_coordinates {
                 cts_curr.reset();
             } else {
-                let dx: i32 = (cts_curr).last_glyph_coords.0 - (cts_curr).first_glyph_coords.0;
-                let dy: i32 = (cts_curr).last_glyph_coords.1 - (cts_curr).first_glyph_coords.1;
-                (cts_curr).reset();
-                //do_tow(dx, dy);
+                let dx: i32 = cts_curr.last_glyph_coords.0 - cts_curr.first_glyph_coords.0;
+                let dy: i32 = cts_curr.last_glyph_coords.1 - cts_curr.first_glyph_coords.1;
+                cts_curr.reset();
+                do_tow(dx, dy);
             }
         }
     };
-    unsafe {
-        //  gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-        // gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
-        gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-    }
 }
 
 fn spookify_tow() {
@@ -399,9 +399,10 @@ fn spookify_tow() {
 }
 
 fn main() {
-    // spookify_tow();
+    //spookify_tow();
+
     // Shared state between CBs
-    let cts: CaretTowState = CaretTowState {
+    let mut cts: CaretTowState = CaretTowState {
         counter: 0,
         pointer_first: (0, 0),
         first_glyph_coords: (0, 0),
@@ -412,8 +413,13 @@ fn main() {
     let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
     debug_assert!(!pxdo_sys.is_null());
 
-    let mut data: Duet<'static> = (cts, pxdo_sys);
-    let vpdata = &mut data as *mut Duet as *mut libc::c_void;
+    // In data, cts a &mut to avoid consumption by the CB
+    // This means it must return before the new event for
+    // the state to be a coherent reflection of what happened.
+    // If not.. Arc etc
+    let data: Duet = (&mut cts, pxdo_sys);
+
+    let vpdata = &data as *const Duet as *mut libc::c_void;
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
     let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
 
