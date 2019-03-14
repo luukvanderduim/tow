@@ -31,9 +31,31 @@ featuremay have with the zoom feature of xfwm4.
 
 TO DO:
 - It works somewhat, but it has (many) flaws
-    events may be missed, thus the mover may heve incomplete knowledge.
-    We can be smarter than this! ;)
+-
+Events may be missed, thus the mover may heve incomplete knowledge.
+ We can be smarter than this! ;)
+
 -  move by timeframe (as opposed to 10 characters)
  - non blocking mover.
  - detect and 'play nice' with policy kit.
  - ..
+
+## usage
+
+prerequisites include
+. Rust development toolchain.
+. libatspi
+
+ $ git clone https://github.com/luukvanderduim/tow.git
+ $ cd tow
+ $ cargo build --release
+ $ cargo run --release
+
+ tow is a daemon and currently has no way to gracefully exit.
+ So you may want to kill it when done experimenting with it.
+
+ ## Contributions
+
+ Yes, please!
+
+ (Keep in mind all code contributed will be licenced like tow is.)
