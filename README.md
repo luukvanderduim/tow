@@ -30,7 +30,10 @@ featuremay have with the zoom feature of xfwm4.
  be 'towed' by the caret.
 
 TO DO:
-- Getting it to work!
+- It works somewhat, but it has (many) flaws
+    events may be missed, thus the mover may heve incomplete knowledge.
+    We can be smarter than this! ;)
+-  move by timeframe (as opposed to 10 characters)
  - non blocking mover.
  - detect and 'play nice' with policy kit.
  - ..
