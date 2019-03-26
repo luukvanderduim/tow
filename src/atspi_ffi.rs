@@ -1,0 +1,124 @@
+use gtypes::primitive::{gboolean, gchar, gint, guint};
+use glib_sys::{GError, GDestroyNotify};
+use gobject_sys::{GValue, GTypeInterface};
+use glib::object::GObject;
+use glib_sys::{GPtrArray, GHashTable};
+
+
+//=========== Foreign Functions and types
+// These were generated using 'bindgen'.
+
+
+// == types:
+
+type AtspiObject = _AtspiObject;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct _AtspiObject {
+    parent: GObject,
+    app: *const ::std::os::raw::c_void,
+    path: *mut ::std::os::raw::c_char,
+}
+
+pub type AtspiAccessible = _AtspiAccessible;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiAccessible {
+    parent: AtspiObject,
+    accessible_parent: *mut AtspiAccessible,
+    children: *mut GPtrArray,
+    role: AtspiRole,
+    interfaces: gint,
+    name: *mut ::std::os::raw::c_char,
+    description: *mut ::std::os::raw::c_char,
+    states: *const ::std::os::raw::c_void, //AtspiStateSet
+    attributes: *mut GHashTable,
+    cached_properties: guint,
+    priv_: *const ::std::os::raw::c_void, // AtspiAccessiblePrivate
+}
+pub type AtspiEventListenerCB = ::std::option::Option<
+    unsafe extern "C" fn(event: *mut AtspiEvent, user_data: *mut ::std::os::raw::c_void),
+>;
+type AtspiRole = u32;
+
+pub type AtspiEventListener = _AtspiEventListener;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiEventListener {
+    parent: GObject,
+    callback: AtspiEventListenerCB,
+    user_data: *mut ::std::os::raw::c_void,
+    cb_destroyed: GDestroyNotify,
+}
+type AtspiLocaleType = u32;
+type AtspiCoordType = u32;
+pub const ATSPI_COORD_TYPE_SCREEN: AtspiCoordType = 0;
+pub const ATSPI_COORD_TYPE_WINDOW: AtspiCoordType = 1;
+
+pub type AtspiEvent = _AtspiEvent;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct _AtspiEvent {
+pub type_: *mut gchar,
+pub source: *mut AtspiAccessible,
+pub detail1: gint,                  // Registered events mask (?)
+pub detail2: gint,
+pub any_data: GValue,
+}
+type AtspiText = _AtspiText;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiText {
+    parent: GTypeInterface,
+}
+pub type AtspiRect = _AtspiRect;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiRect {
+   pub x: gint,
+   pub y: gint,
+    width: gint,
+    height: gint,
+}
+type guint32 = ::std::os::raw::c_uint;
+type GQuark = guint32;
+type gpointer = *mut ::std::os::raw::c_void;
+
+//
+// atspi functions
+//
+
+#[link(name = "atspi")]
+extern "C" {
+    //--------- atspi_misc
+   pub fn atspi_init() -> ::std::os::raw::c_int;
+   pub fn atspi_exit() -> ::std::os::raw::c_int;
+   pub fn atspi_event_main();
+
+    //-------- atspi_text
+   pub fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
+   pub fn atspi_text_get_character_extents(
+        obj: *mut AtspiText,
+        offset: gint,
+        type_: AtspiCoordType,
+        error: *mut *mut GError,
+    ) -> *mut AtspiRect;
+
+    //------- atspi_accessible
+   pub fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
+
+    //------- atsi_event
+
+    pub fn atspi_event_listener_new(
+        callback: AtspiEventListenerCB,
+        user_data: gpointer,
+        callback_destroyed: GDestroyNotify,
+    ) -> *mut AtspiEventListener;
+
+    pub fn atspi_event_listener_register(
+        listener: *mut AtspiEventListener,
+        event_type: *const gchar,
+        error: *mut *mut GError,
+    ) -> gboolean;
+} // extern "C"

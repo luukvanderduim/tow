@@ -1,6 +1,7 @@
 # tow
 
     an ergonomy helper for desktop zoom users.
+    Adding a little extra convenience to zoom.
 
 Tow has the zoom area be 'towed by the keyboard caret'.
 
@@ -13,7 +14,7 @@ Your mileage may vary.
 Tow seeks to scratch an itch some users who depend on the zoom
 featuremay have with the zoom feature of xfwm4.
 
-# The problem:
+## Problem description
  The user directs the zoom view port to some (text input)
  area by means of eg. the mouse. ( or any other pointer device ).
 
@@ -25,7 +26,7 @@ featuremay have with the zoom feature of xfwm4.
  the zoomed view port match the caret's current position.
  But not for long.
 
-# The solution
+## The solution
  Tow aims to automate the readjusting by having the zoom view port
  be 'towed' by the caret.
 
@@ -35,12 +36,14 @@ TO DO:
 Events may be missed, thus the mover may heve incomplete knowledge.
  We can be smarter than this! ;)
 
--  move by timeframe (as opposed to 10 characters)
+-  move by periodically as opposed to current per 10 characters moved
+-  fix moving backwards and up
+-
  - non blocking mover.
  - detect and 'play nice' with policy kit.
  - ..
 
-## usage
+## How to use
 
 prerequisites include
 . Rust development toolchain.
@@ -54,7 +57,7 @@ prerequisites include
  tow is a daemon and currently has no way to gracefully exit.
  So you may want to kill it when done experimenting with it.
 
- ## Contributions
+## Contributions
 
  Yes, please!
 

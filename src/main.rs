@@ -28,11 +28,11 @@ however it might work with other desktop environments aswell.
 #![feature(extern_types)]
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
+#![feature(exclusive_range_pattern)]
 
+use gtypes::gpointer;
 use daemonize::Daemonize;
 use libc;
-//use glib::error::Error;
-//use glib::Quark;
 use glib_sys::{GDestroyNotify, GError, GHashTable, GPtrArray};
 use gobject_sys::*;
 use gtypes::primitive::{gboolean, gchar, gint, guint};
@@ -42,9 +42,12 @@ use std::f64::consts::E;
 use std::ffi::CString;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use xcb;
 use xcb::base::Connection;
+
+mod atspi_ffi;
+use atspi_ffi::*;
 
 const SLIDE_DUR: Duration = Duration::from_micros(1_000_000);
 const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
@@ -52,24 +55,32 @@ const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
     counter: i32,
-    pointer_first: (i32, i32),
-    first_glyph_coords: (i32, i32),
-    last_glyph_coords: (i32, i32),
+    timestamp: Option<Instant>,
+    pointer_at_begin: (i32, i32),
+    glyph_coords_end: (i32, i32),
+    glyph_coords_begin: (i32, i32),
+    behavior: Behavior,
 }
 impl CaretTowState {
     fn reset(&mut self) {
         self.counter = 0;
-        self.pointer_first = (0, 0);
-        self.first_glyph_coords = (0, 0);
-        self.last_glyph_coords = (0, 0);
+        self.pointer_at_begin = (0, 0);
+        self.glyph_coords_end = (0, 0);
+        self.glyph_coords_begin = (0, 0);
     }
     fn advance(&mut self, l: (i32, i32)) {
         self.counter += 1;
-        self.last_glyph_coords = l;
+        self.glyph_coords_begin = l;
     }
 }
 
 type Duet<'a> = (&'a mut CaretTowState, *mut libxdo_sys::Struct_xdo);
+
+#[derive(Clone, Copy, Debug)]
+enum Behavior {
+    Periodically { dur: Duration },
+    By_Characters { nc: i32 },
+}
 
 /* enum move_style {
     sigmoid,
@@ -98,6 +109,13 @@ fn get_sigmoid() -> Vec<f64> {
         .map(|x| x / ksum.sum())
         .collect()
 } //FIXME SIGMOID DOES NOT ADD UP???
+
+#[cfg(test)]
+#[test]
+fn test_get_sigmoid() {
+    assert_eq!(get_sigmoid().into_iter().sum(), 1.0f64);
+}
+
 
 fn get_move_queue() -> Vec<f64> {
     let mut halfqueue = get_sigmoid().clone();
@@ -167,118 +185,6 @@ fn get_pointer_coordinates() -> (i32, i32) {
     };
 }
 
-// ================= Foreign Types
-type AtspiObject = _AtspiObject;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct _AtspiObject {
-    parent: GObject,
-    app: *const ::std::os::raw::c_void,
-    path: *mut ::std::os::raw::c_char,
-}
-
-type AtspiAccessible = _AtspiAccessible;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct _AtspiAccessible {
-    parent: AtspiObject,
-    accessible_parent: *mut AtspiAccessible,
-    children: *mut GPtrArray,
-    role: AtspiRole,
-    interfaces: gint,
-    name: *mut ::std::os::raw::c_char,
-    description: *mut ::std::os::raw::c_char,
-    states: *const ::std::os::raw::c_void, //AtspiStateSet
-    attributes: *mut GHashTable,
-    cached_properties: guint,
-    priv_: *const ::std::os::raw::c_void, // AtspiAccessiblePrivate
-}
-type AtspiEventListenerCB = ::std::option::Option<
-    unsafe extern "C" fn(event: *mut AtspiEvent, user_data: *mut ::std::os::raw::c_void),
->;
-type AtspiRole = u32;
-
-type AtspiEventListener = _AtspiEventListener;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct _AtspiEventListener {
-    parent: GObject,
-    callback: AtspiEventListenerCB,
-    user_data: *mut ::std::os::raw::c_void,
-    cb_destroyed: GDestroyNotify,
-}
-type AtspiLocaleType = u32;
-type AtspiCoordType = u32;
-const ATSPI_COORD_TYPE_SCREEN: AtspiCoordType = 0;
-const ATSPI_COORD_TYPE_WINDOW: AtspiCoordType = 1;
-
-type AtspiEvent = _AtspiEvent;
-#[repr(C)]
-#[derive(Copy, Clone)]
-struct _AtspiEvent {
-    type_: *mut gchar,
-    source: *mut AtspiAccessible,
-    detail1: gint, // Registered events mask (?)
-    detail2: gint,
-    any_data: GValue,
-}
-type AtspiText = _AtspiText;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct _AtspiText {
-    parent: GTypeInterface,
-}
-type AtspiRect = _AtspiRect;
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct _AtspiRect {
-    x: gint,
-    y: gint,
-    width: gint,
-    height: gint,
-}
-type guint32 = ::std::os::raw::c_uint;
-type GQuark = guint32;
-type gpointer = *mut ::std::os::raw::c_void;
-
-//=========== End foreign types
-//=========== Foreign Functions
-#[link(name = "atspi")]
-extern "C" {
-    //--------- atspi_misc
-    fn atspi_init() -> ::std::os::raw::c_int;
-    fn atspi_exit() -> ::std::os::raw::c_int;
-    fn atspi_event_main();
-
-    //-------- atspi_text
-    fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
-    fn atspi_text_get_character_extents(
-        obj: *mut AtspiText,
-        offset: gint,
-        type_: AtspiCoordType,
-        error: *mut *mut GError,
-    ) -> *mut AtspiRect;
-
-    //------- atspi_accessible
-    fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
-
-    //------- atsi_event
-
-    fn atspi_event_listener_new(
-        callback: AtspiEventListenerCB,
-        user_data: gpointer,
-        callback_destroyed: GDestroyNotify,
-    ) -> *mut AtspiEventListener;
-
-    fn atspi_event_listener_register(
-        listener: *mut AtspiEventListener,
-        event_type: *const gchar,
-        error: *mut *mut GError,
-    ) -> gboolean;
-
-}
-//=========== End foreign functions
 
 extern "C" fn destroy_evgarbage(data: gpointer) {
     unsafe { libc::free(data) };
@@ -295,20 +201,12 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // We can however make the raw into a normal &mut
     let pdata = vpdata as *mut Duet;
     let data = unsafe { &mut *pdata };
-
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
-    assert!(!text_iface.is_null());
-
     let mut caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
-    // 'Detail1' is likely the mask of event(s) we registered for (?)
+    // 'Detail1' might be the mask of event(s) we registered for (?)
     // Problem is that it is undocumented.
     if unsafe { (*event).detail1 == 0 } {
-        /*  unsafe {
-            gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-            gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-        } */
-        // Apparently above freeing is wrong or unneeded?!
         return;
     }
 
@@ -324,7 +222,6 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             null_mut(), // GError
         )
     };
-    debug_assert!(!glyph_extents.is_null());
 
     // Often atspi_text_get_character_extents() seems to return twice:
     // Once with a valid value and once, supposedly at the origin of the screen
@@ -332,52 +229,73 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // Until the cause is found and fixed, filter these.
 
     let caret_coords_now: (i32, i32) = unsafe { ((*glyph_extents).x, (*glyph_extents).y) };
-
     if caret_coords_now == (0, 0) {
-        /*     unsafe {
-            gobject_sys::g_object_unref(event as *mut gobject_sys::GObject);
-            gobject_sys::g_object_unref(glyph_extents as *mut gobject_sys::GObject);
-            gobject_sys::g_object_unref(text_iface as *mut gobject_sys::GObject);
-        } */
-        // Cleaning up does noet seem to work like this .. Causes segfault.
         return;
     }
 
-    // 'Move per ten events'is fine as stategy until:
+    // 'Move per X events'is fine as strategy until:
     // - somewhere between 0..10 the mouse pointer is moved
     // and with it our view port.
 
-    // Rust will assure we'll never consume my borrowed cts: cts_curr
-    // We end up with a '&mut &mut', Maybe make a single &mut?
+    // Rust will assure we'll never consume the borrowed cts: cts_curr
+    // We end up with a '&mut &mut', Can we do a single &mut?
     let (cts_curr, pxdo_sys) = data;
-
     let pointer_coordinates = get_pointer_coordinates();
 
-    match cts_curr.counter {
-        0 => {
-            cts_curr.counter += 1;
-            cts_curr.pointer_first = pointer_coordinates;
-            cts_curr.first_glyph_coords = caret_coords_now;
-            cts_curr.last_glyph_coords = caret_coords_now;
-        }
-        1..=9 => {
-            if cts_curr.pointer_first != pointer_coordinates {
-                cts_curr.reset();
-            } else {
-                cts_curr.advance(caret_coords_now);
-            }
-        }
-        _ => {
-            if cts_curr.pointer_first != pointer_coordinates {
-                cts_curr.reset();
-            } else {
-                let dx: i32 = cts_curr.last_glyph_coords.0 - cts_curr.first_glyph_coords.0;
-                let dy: i32 = cts_curr.last_glyph_coords.1 - cts_curr.first_glyph_coords.1;
-                cts_curr.reset();
-                do_tow(dx, dy);
-            }
-        }
+
+
+    let mut periodically = | dur, cts_curr: &mut &mut CaretTowState | {
+        match (**cts_curr).timestamp {
+            Some(timestamp) if timestamp.elapsed() < dur  => {    return;  },
+            Some(timestamp) if timestamp.elapsed() >= dur  => {
+                        (**cts_curr).glyph_coords_end = caret_coords_now; // We could use caret now directly
+                        let dx: i32 = (**cts_curr).glyph_coords_begin.0 - cts_curr.glyph_coords_end.0;
+                        let dy: i32 = (**cts_curr).glyph_coords_begin.1 - cts_curr.glyph_coords_end.1;
+                        cts_curr.reset();
+                        (**cts_curr).timestamp = None;
+                        do_tow(dx, dy);
+                    },
+        None =>  {
+            (**cts_curr).timestamp = Some(Instant::now());
+            (**cts_curr).pointer_at_begin = pointer_coordinates;
+            (**cts_curr).glyph_coords_begin = caret_coords_now;
+            },
+        Some(_) => { panic!("Wonderous machine: unreachable state timestamp value");  },
+        };
     };
+
+    let mut every_so_much_characters = | nc, cts_curr: &mut &mut CaretTowState | {
+        if (**cts_curr).counter == 0 {
+                    (**cts_curr).counter += 1;
+                    (**cts_curr).pointer_at_begin = pointer_coordinates;
+                    (**cts_curr).glyph_coords_end = caret_coords_now;
+                    (**cts_curr).glyph_coords_begin = caret_coords_now;
+            }
+        else if ((**cts_curr).counter > 0 &&  (**cts_curr).counter<=nc)   {
+                    if (**cts_curr).pointer_at_begin != pointer_coordinates {
+                        (**cts_curr).reset();
+                    } else {
+                        (**cts_curr).advance(caret_coords_now);
+                    }
+            }
+        else    {
+                    if (**cts_curr).pointer_at_begin != pointer_coordinates {
+                        (**cts_curr).reset();
+                    } else {
+                        let dx: i32 = (**cts_curr).glyph_coords_begin.0 - cts_curr.glyph_coords_end.0;
+                        let dy: i32 = (**cts_curr).glyph_coords_begin.1 - cts_curr.glyph_coords_end.1;
+                        (**cts_curr).reset();
+                        do_tow(dx, dy);
+                    }
+        }
+
+    };
+
+    match (**cts_curr).behavior {
+            Behavior::Periodically { dur } => periodically( dur.clone(), cts_curr ),
+            Behavior::By_Characters { nc } => every_so_much_characters( nc.clone(), cts_curr ),
+    };
+
 }
 
 fn spookify_tow() {
@@ -399,26 +317,28 @@ fn spookify_tow() {
 }
 
 fn main() {
-    //spookify_tow();
+   // spookify_tow();
+    let manner = Behavior::Periodically { dur: Duration::from_micros(3_000_000) };
+ // let manner = Behavior::By_Characters { nc: 10 };
 
     // Shared state between CBs
     let mut cts: CaretTowState = CaretTowState {
         counter: 0,
-        pointer_first: (0, 0),
-        first_glyph_coords: (0, 0),
-        last_glyph_coords: (0, 0),
+        timestamp: None,
+        pointer_at_begin: (0, 0),
+        glyph_coords_end: (0, 0),
+        glyph_coords_begin: (0, 0),
+        behavior: manner,
     };
 
-    // xdo_sys pointer
-    let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
-    debug_assert!(!pxdo_sys.is_null());
+     let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
 
-    // In data, cts a &mut to avoid consumption by the CB
-    // This means it must return before the new event for
-    // the state to be a coherent reflection of what happened.
-    // If not.. Arc etc
+    // In data, the state is borrowed (to avoid consumption )
+    // This means the CB must return before the new event happens for
+    // the state to be a coherent reflection of affairs.
+    // Iow: we might miss events (characters) if we do not return in time.
+
     let data: Duet = (&mut cts, pxdo_sys);
-
     let vpdata = &data as *const Duet as *mut libc::c_void;
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
     let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
