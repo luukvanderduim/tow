@@ -40,6 +40,15 @@ pub type AtspiEventListenerCB = ::std::option::Option<
 >;
 type AtspiRole = u32;
 
+pub type AtspiEventListenerMode = _AtspiEventListenerMode;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiEventListenerMode {
+    pub synchronous: gboolean,
+    pub preemptive: gboolean,
+    pub global: gboolean,
+}
+
 pub type AtspiEventListener = _AtspiEventListener;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
