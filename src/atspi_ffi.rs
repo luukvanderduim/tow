@@ -1,13 +1,11 @@
-use gtypes::primitive::{gboolean, gchar, gint, guint};
-use glib_sys::{GError, GDestroyNotify};
-use gobject_sys::{GValue, GTypeInterface};
 use glib::object::GObject;
-use glib_sys::{GPtrArray, GHashTable};
-
+use glib_sys::{GDestroyNotify, GError};
+use glib_sys::{GHashTable, GPtrArray};
+use gobject_sys::{GTypeInterface, GValue};
+use gtypes::primitive::{gboolean, gchar, gint, guint};
 
 //=========== Foreign Functions and types
 // These were generated using 'bindgen'.
-
 
 // == types:
 
@@ -30,7 +28,7 @@ pub struct _AtspiAccessible {
     children: *mut GPtrArray,
     role: AtspiRole,
     interfaces: gint,
-    name: *mut ::std::os::raw::c_char,
+    pub name: *mut ::std::os::raw::c_char,
     description: *mut ::std::os::raw::c_char,
     states: *const ::std::os::raw::c_void, //AtspiStateSet
     attributes: *mut GHashTable,
@@ -60,13 +58,13 @@ pub type AtspiEvent = _AtspiEvent;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct _AtspiEvent {
-pub type_: *mut gchar,
-pub source: *mut AtspiAccessible,
-pub detail1: gint,                  // Registered events mask (?)
-pub detail2: gint,
-pub any_data: GValue,
+    pub type_: *mut gchar,
+    pub source: *mut AtspiAccessible,
+    pub detail1: gint, // Registered events mask (?)
+    pub detail2: gint,
+    pub any_data: GValue,
 }
-type AtspiText = _AtspiText;
+pub type AtspiText = _AtspiText;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _AtspiText {
@@ -76,8 +74,8 @@ pub type AtspiRect = _AtspiRect;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _AtspiRect {
-   pub x: gint,
-   pub y: gint,
+    pub x: gint,
+    pub y: gint,
     width: gint,
     height: gint,
 }
@@ -92,13 +90,13 @@ type gpointer = *mut ::std::os::raw::c_void;
 #[link(name = "atspi")]
 extern "C" {
     //--------- atspi_misc
-   pub fn atspi_init() -> ::std::os::raw::c_int;
-   pub fn atspi_exit() -> ::std::os::raw::c_int;
-   pub fn atspi_event_main();
+    pub fn atspi_init() -> ::std::os::raw::c_int;
+    pub fn atspi_exit() -> ::std::os::raw::c_int;
+    pub fn atspi_event_main();
 
     //-------- atspi_text
-   pub fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
-   pub fn atspi_text_get_character_extents(
+    pub fn atspi_text_get_caret_offset(obj: *mut AtspiText, error: *mut *mut GError) -> gint;
+    pub fn atspi_text_get_character_extents(
         obj: *mut AtspiText,
         offset: gint,
         type_: AtspiCoordType,
@@ -106,7 +104,7 @@ extern "C" {
     ) -> *mut AtspiRect;
 
     //------- atspi_accessible
-   pub fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
+    pub fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
 
     //------- atsi_event
 

@@ -24,19 +24,18 @@ It is made with the Xfce4 desktop in mind,
 however it might work with other desktop environments aswell.
 */
 // #![warn(clippy::all)]
-#![feature(duration_as_u128)]
-#![feature(extern_types)]
+// #![feature(duration_as_u128)]
+#![feature(extern_types, exclusive_range_pattern)]
 #![allow(unused_imports)]
 #![allow(non_camel_case_types)]
-#![feature(exclusive_range_pattern)]
 
-use gtypes::gpointer;
 use daemonize::Daemonize;
-use libc;
 use glib_sys::{GDestroyNotify, GError, GHashTable, GPtrArray};
 use gobject_sys::*;
+use gtypes::gpointer;
 use gtypes::primitive::{gboolean, gchar, gint, guint};
-use kahan::{KahanSum, KahanSummator};
+use libc;
+use libc_print;
 use libxdo::XDo;
 use std::f64::consts::E;
 use std::ffi::CString;
@@ -49,8 +48,8 @@ use xcb::base::Connection;
 mod atspi_ffi;
 use atspi_ffi::*;
 
-const SLIDE_DUR: Duration = Duration::from_micros(1_000_000);
-const FRAME_DUR: Duration = Duration::from_micros(1_000_000 / 30);
+const SLIDE_DUR: Duration = Duration::from_millis(1000);
+const FRAME_DUR: Duration = Duration::from_millis(1000 / 30);
 
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
@@ -59,11 +58,16 @@ struct CaretTowState {
     pointer_at_begin: (i32, i32),
     glyph_coords_end: (i32, i32),
     glyph_coords_begin: (i32, i32),
+    evsname: Option<*const ::std::os::raw::c_char>,
+    detail: gint,
     behavior: Behavior,
 }
 impl CaretTowState {
     fn reset(&mut self) {
         self.counter = 0;
+        self.detail = 0;
+        self.timestamp = None;
+        self.evsname = None;
         self.pointer_at_begin = (0, 0);
         self.glyph_coords_end = (0, 0);
         self.glyph_coords_begin = (0, 0);
@@ -80,92 +84,93 @@ type Duet<'a> = (&'a mut CaretTowState, *mut libxdo_sys::Struct_xdo);
 enum Behavior {
     Periodically { dur: Duration },
     By_Characters { nc: i32 },
+    Typewriter,
 }
 
-/* enum move_style {
-    sigmoid,
-    warp,
-    typewriter,
-    parabolic,
-} */
-
-// static ms: move_style = sigmoid;
-
-// 'Sigmoid' (S-shaped curve). Tow uses tanh in 0..2 range to model 'smooth' pointer animation.
-
+//  .map(|x| (E.powf(x) - E.powf(-x)) / (E.powf(x) + E.powf(-x))) // tanh
+// get_sigmoid makes us a S-shaped graph data
+// a fluent slope within certain bounds
 fn get_sigmoid() -> Vec<f64> {
-    let xd: f64 = 2.0 / ((SLIDE_DUR.as_micros() / FRAME_DUR.as_micros()) / 2) as f64;
-    let sigmoid: Vec<f64> = (0..2_000_000)
-        .step_by((xd * f64::from(1_000_000)) as usize)
-        .map(|x| f64::from(x) / f64::from(1_000_000))
-        .map(|x| (E.powf(x) - E.powf(-x)) / (E.powf(x) + E.powf(-x)))
+    let frpslide = ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
+        / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64))
+        as f64;
+    let dx: f64 = 1.0 / (frpslide * 0.5);
+    let sigmoid: Vec<f64> = (0..1000)
+        .step_by((dx * f64::from(1000)) as usize)
+        .map(|x| f64::from(x) / f64::from(1000))
+        .map(|x| f64::from(1) / f64::from(1.0_f64 + E.powf(12.0_f64 * x - 6.0_f64)))
         .collect();
 
-    let ksum: KahanSum<f64> = sigmoid.clone().into_iter().kahan_sum();
-
     sigmoid
-        .clone()
-        .into_iter()
-        .map(|x| x / ksum.sum())
-        .collect()
-} //FIXME SIGMOID DOES NOT ADD UP???
+}
 
 #[cfg(test)]
 #[test]
 fn test_get_sigmoid() {
-    assert_eq!(get_sigmoid().into_iter().sum(), 1.0f64);
+    assert_eq!(1.0, 1.0f64);
 }
+//
+// get_move_shape yields a _/\_ shaped curve
+// It consists of two sigmoids of which one is reversed.
+fn get_move_shape() -> Vec<f64> {
+    let mut right_half = get_sigmoid();
+    let mut cl = get_sigmoid();
+    let mut left_half: Vec<f64> = Vec::new();
 
-
-fn get_move_queue() -> Vec<f64> {
-    let mut halfqueue = get_sigmoid().clone();
-    let mut queue: Vec<f64> = get_sigmoid().clone();
-
-    // Add halfqueue to queue in reversed order.
-    // queue -> slope up /\ slope down
-    while !halfqueue.is_empty() {
-        if let Some(v) = halfqueue.pop() {
-            queue.push(v);
-        } else {
-            eprintln!("Wonderous machine!");
+    while !cl.is_empty() {
+        if let Some(element) = cl.pop() {
+            left_half.push(element);
         }
     }
-    queue
+    left_half.append(&mut right_half);
+    left_half
+}
+#[cfg(test)]
+#[test]
+fn test_get_move_shape() {
+    assert_eq!(get_move_shape().len(), 2 * get_sigmoid().len());
+    assert_eq!(get_move_shape().first(), get_move_shape().last());
 }
 
-fn do_tow(dx: i32, dy: i32) {
+fn do_tow(mut dx: i32, mut dy: i32) {
+    let mut values = get_move_shape();
+    let nframes = values.len();
     let xdo = libxdo::XDo::new(None).expect("Failed to obtain XDo handle.");
-    let mq = get_move_queue();
-    do_move(xdo, mq, dx, dy, 0.0);
+    let mut cx: f64 = 0.0;
+    let mut xmove_amount: f64 = 0.0;
+    let mut ymove_amount: f64 = 0.0;
+    let mut y_in_x: f64 = dy as f64 / dx as f64;
 
-    // xdo.move_mouse_relative(dx, dy).expect("Failed to move!");
-}
-fn do_move(xdo: XDo, mut qu: Vec<f64>, mut dx: i32, mut dy: i32, cx: f64) {
-    if !qu.is_empty() {
-        std::thread::sleep(FRAME_DUR);
-        let xmove_amount: f64;
-        let y_as_xfraction: f64 = dy as f64 / dx as f64;
-
-        if let Some(value) = qu.first() {
-            xmove_amount = value * dx as f64 + cx;
-            qu.remove(0);
+    while !values.is_empty() {
+        if let Some(value) = values.first() {
+            xmove_amount = (value * dx as f64 + cx as f64) / (nframes as f64 / 2.0) as f64;
+            values.remove(0);
         } else {
-            eprintln!("Wonderous machine!! do_tow failed in calculating move");
-            return;
+            panic!("First value in values appears to not be Some().");
         }
 
-        if xmove_amount < 1.0 {
-            do_move(xdo, qu, dx, dy, xmove_amount);
-        } else {
-            let amount_y: i32 = (xmove_amount * y_as_xfraction).trunc() as i32;
-            xdo.move_mouse_relative(xmove_amount.trunc() as i32, amount_y)
+        if xmove_amount.abs() < 1.0 {
+            cx = xmove_amount;
+            continue; // next iteration of while
+        } else if xmove_amount.abs() >= 1.0 {
+            ymove_amount = xmove_amount * y_in_x;
+            xdo.move_mouse_relative(xmove_amount.trunc() as i32, ymove_amount.trunc() as i32)
                 .expect("Failed to move!");
-            dx -= xmove_amount.trunc() as i32;
-            dy -= amount_y;
-            do_move(xdo, qu, dx, dy, xmove_amount.trunc());
+
+            cx = xmove_amount.fract();
+            std::thread::sleep(FRAME_DUR);
+        } else {
+            panic!("Wonderous machine! xmove_amount abnormal.");
         }
     }
 }
+
+fn move_one(mut x: i32, mut y: i32) {
+    let xdo = libxdo::XDo::new(None).expect("Failed to obtain XDo handle.");
+
+    xdo.move_mouse_relative(x as i32, y as i32)
+        .expect("Failed to move!");
+} //remove and replace by xcb::xproto::warp_pointer
 
 fn get_pointer_coordinates() -> (i32, i32) {
     let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
@@ -185,7 +190,6 @@ fn get_pointer_coordinates() -> (i32, i32) {
     };
 }
 
-
 extern "C" fn destroy_evgarbage(data: gpointer) {
     unsafe { libc::free(data) };
 }
@@ -202,12 +206,19 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     let pdata = vpdata as *mut Duet;
     let data = unsafe { &mut *pdata };
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
-    let mut caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
+    let caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
+    let event_source_name: *const ::std::os::raw::c_char =
+        unsafe { (*(*event).source).name } as *const ::std::os::raw::c_char;
 
     // 'Detail1' might be the mask of event(s) we registered for (?)
     // Problem is that it is undocumented.
-    if unsafe { (*event).detail1 == 0 } {
+    if unsafe { !(*event).detail1 == 0 } {
         return;
+    }
+    unsafe {
+        if !((*event).type_.is_null()) {
+            println!("Event type: {:?}", (*event).type_);
+        }
     }
 
     // Because we cannot ask for the co-ordinates of the caret directly,
@@ -242,60 +253,79 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     let (cts_curr, pxdo_sys) = data;
     let pointer_coordinates = get_pointer_coordinates();
 
-
-
-    let mut periodically = | dur, cts_curr: &mut &mut CaretTowState | {
-        match (**cts_curr).timestamp {
-            Some(timestamp) if timestamp.elapsed() < dur  => {    return;  },
-            Some(timestamp) if timestamp.elapsed() >= dur  => {
-                        (**cts_curr).glyph_coords_end = caret_coords_now; // We could use caret now directly
-                        let dx: i32 = (**cts_curr).glyph_coords_begin.0 - cts_curr.glyph_coords_end.0;
-                        let dy: i32 = (**cts_curr).glyph_coords_begin.1 - cts_curr.glyph_coords_end.1;
-                        cts_curr.reset();
-                        (**cts_curr).timestamp = None;
-                        do_tow(dx, dy);
-                    },
-        None =>  {
-            (**cts_curr).timestamp = Some(Instant::now());
-            (**cts_curr).pointer_at_begin = pointer_coordinates;
-            (**cts_curr).glyph_coords_begin = caret_coords_now;
-            },
-        Some(_) => { panic!("Wonderous machine: unreachable state timestamp value");  },
+    let mut periodically = |dur, cts_curr: &mut &mut CaretTowState| {
+        match cts_curr.timestamp {
+            Some(timestamp) if timestamp.elapsed() < dur => {
+                if cts_curr.pointer_at_begin != pointer_coordinates {
+                    cts_curr.reset();
+                }
+            }
+            Some(timestamp) if timestamp.elapsed() >= dur => {
+                let dx: i32 = caret_coords_now.0 - cts_curr.glyph_coords_begin.0;
+                let dy: i32 = caret_coords_now.1 - cts_curr.glyph_coords_begin.1;
+                cts_curr.reset();
+                do_tow(dx, dy);
+                return;
+            }
+            None => {
+                cts_curr.timestamp = Some(Instant::now());
+                cts_curr.pointer_at_begin = pointer_coordinates;
+                cts_curr.glyph_coords_begin = caret_coords_now;
+            }
+            Some(_) => {
+                panic!("Wonderous machine: unreachable state timestamp value");
+            }
         };
     };
 
-    let mut every_so_much_characters = | nc, cts_curr: &mut &mut CaretTowState | {
-        if (**cts_curr).counter == 0 {
-                    (**cts_curr).counter += 1;
-                    (**cts_curr).pointer_at_begin = pointer_coordinates;
-                    (**cts_curr).glyph_coords_end = caret_coords_now;
-                    (**cts_curr).glyph_coords_begin = caret_coords_now;
+    let mut every_so_much_characters = |nc, cts_curr: &mut &mut CaretTowState| {
+        if cts_curr.counter == 0 {
+            cts_curr.counter += 1;
+            cts_curr.pointer_at_begin = pointer_coordinates;
+            cts_curr.glyph_coords_end = caret_coords_now;
+            cts_curr.glyph_coords_begin = caret_coords_now;
+            return;
+        } else if cts_curr.counter > 0 && (**cts_curr).counter <= nc {
+            if cts_curr.pointer_at_begin != pointer_coordinates {
+                cts_curr.reset();
+                return;
+            } else {
+                cts_curr.advance(caret_coords_now);
+                return;
             }
-        else if ((**cts_curr).counter > 0 &&  (**cts_curr).counter<=nc)   {
-                    if (**cts_curr).pointer_at_begin != pointer_coordinates {
-                        (**cts_curr).reset();
-                    } else {
-                        (**cts_curr).advance(caret_coords_now);
-                    }
+        } else {
+            if cts_curr.pointer_at_begin != pointer_coordinates {
+                cts_curr.reset();
+                return;
+            } else {
+                let dx: i32 = caret_coords_now.0 - cts_curr.glyph_coords_begin.0;
+                let dy: i32 = caret_coords_now.1 - cts_curr.glyph_coords_begin.1;
+                cts_curr.reset();
+                do_tow(dx, dy);
+                return;
             }
-        else    {
-                    if (**cts_curr).pointer_at_begin != pointer_coordinates {
-                        (**cts_curr).reset();
-                    } else {
-                        let dx: i32 = (**cts_curr).glyph_coords_begin.0 - cts_curr.glyph_coords_end.0;
-                        let dy: i32 = (**cts_curr).glyph_coords_begin.1 - cts_curr.glyph_coords_end.1;
-                        (**cts_curr).reset();
-                        do_tow(dx, dy);
-                    }
         }
-
     };
 
-    match (**cts_curr).behavior {
-            Behavior::Periodically { dur } => periodically( dur.clone(), cts_curr ),
-            Behavior::By_Characters { nc } => every_so_much_characters( nc.clone(), cts_curr ),
+    let mut every_other_character = |cts_curr: &mut &mut CaretTowState| {
+        if cts_curr.counter == 0 {
+            cts_curr.counter += 1;
+            cts_curr.glyph_coords_begin = caret_coords_now;
+            cts_curr.pointer_at_begin = pointer_coordinates;
+        } else {
+            let x = caret_coords_now.0 - cts_curr.pointer_at_begin.0;
+            let y = caret_coords_now.1 - cts_curr.pointer_at_begin.1;
+            move_one(x, y);
+            cts_curr.reset();
+            return;
+        }
     };
 
+    match cts_curr.behavior {
+        Behavior::Periodically { dur } => periodically(dur, cts_curr),
+        Behavior::By_Characters { nc } => every_so_much_characters(nc, cts_curr),
+        Behavior::Typewriter => every_other_character(cts_curr),
+    };
 }
 
 fn spookify_tow() {
@@ -317,21 +347,26 @@ fn spookify_tow() {
 }
 
 fn main() {
-   // spookify_tow();
-    let manner = Behavior::Periodically { dur: Duration::from_micros(3_000_000) };
- // let manner = Behavior::By_Characters { nc: 10 };
+    // spookify_tow();
+    /*  let manner = Behavior::Periodically {
+        dur: Duration::from_millis(2500),
+    }; */
+    let manner = Behavior::Typewriter;
+    // let manner = Behavior::By_Characters { nc: 15 };
 
     // Shared state between CBs
     let mut cts: CaretTowState = CaretTowState {
         counter: 0,
         timestamp: None,
+        evsname: None,
+        detail: 0,
         pointer_at_begin: (0, 0),
         glyph_coords_end: (0, 0),
         glyph_coords_begin: (0, 0),
         behavior: manner,
     };
 
-     let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
+    let pxdo_sys = unsafe { libxdo_sys::xdo_new(std::ptr::null()) };
 
     // In data, the state is borrowed (to avoid consumption )
     // This means the CB must return before the new event happens for

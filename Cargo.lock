@@ -76,6 +76,14 @@ version = "0.2.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "libc-print"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "libc 0.2.50 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "libxdo"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -145,6 +153,7 @@ dependencies = [
  "kahan 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.50 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc-print 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "libxdo 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "libxdo-sys 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -199,6 +208,7 @@ dependencies = [
 "checksum kahan 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "651155304899705eb4ae40c9f6f135046277f6f0adce067b17f63e13886597ef"
 "checksum lazy_static 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "bc5729f27f159ddd61f4df6228e827e86643d4d3e7c32183cb30a1c08f604a14"
 "checksum libc 0.2.50 (registry+https://github.com/rust-lang/crates.io-index)" = "aab692d7759f5cd8c859e169db98ae5b52c924add2af5fbbca11d12fefb567c1"
+"checksum libc-print 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "f7e52815ed7dd3c2a0e8cc096c1ea26a0be0235db5425c5642ebf2ca136fefba"
 "checksum libxdo 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)" = "00333b8756a3d28e78def82067a377de7fa61b24909000aeaa2b446a948d14db"
 "checksum libxdo-sys 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "db23b9e7e2b7831bbd8aac0bbeeeb7b68cbebc162b227e7052e8e55829a09212"
 "checksum log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)" = "c84ec4b527950aa83a329754b01dbe3f58361d1c5efacd1f6d68c494d08a17c6"
