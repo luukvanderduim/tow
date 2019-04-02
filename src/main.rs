@@ -50,6 +50,7 @@ const SLIDE_DUR: Duration = Duration::from_millis(1000);
 const FRAME_DUR: Duration = Duration::from_millis(1000 / 30);
 const XCB_NONE: u32 = 0;
 
+type Triol<'a> = (&'a mut CaretTowState, (&'a mut xcb::base::Connection, i32));
 
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
@@ -102,7 +103,6 @@ fn get_sigmoid() -> Vec<f64> {
     sigmoid
 }
 
-
 //
 // get_move_shape yields a _/\_ shaped curve
 // It consists of two sigmoids of which one is reversed.
@@ -126,13 +126,13 @@ fn test_get_move_shape() {
     assert_eq!(get_move_shape().first(), get_move_shape().last());
 }
 
-fn do_tow(mut dx: i32, mut dy: i32) {
+fn do_tow(dx: i32, dy: i32, conn: &Connection) {
     let mut values = get_move_shape();
     let nframes = values.len();
     let mut cx: f64 = 0.0;
     let mut xmove_amount: f64 = 0.0;
     let mut ymove_amount: f64 = 0.0;
-    let mut y_in_x: f64 = dy as f64 / dx as f64;
+    let y_in_x: f64 = dy as f64 / dx as f64;
 
     while !values.is_empty() {
         if let Some(value) = values.first() {
@@ -147,7 +147,11 @@ fn do_tow(mut dx: i32, mut dy: i32) {
             continue; // next iteration of while
         } else if xmove_amount.abs() >= 1.0 {
             ymove_amount = xmove_amount * y_in_x;
-            warp(xmove_amount.trunc() as i32, ymove_amount.trunc() as i32);
+            warp(
+                xmove_amount.trunc() as i32,
+                ymove_amount.trunc() as i32,
+                conn,
+            );
             cx = xmove_amount.fract();
             std::thread::sleep(FRAME_DUR);
         } else {
@@ -156,14 +160,15 @@ fn do_tow(mut dx: i32, mut dy: i32) {
     }
 }
 
-fn warp(x: i32, y: i32) {
-   let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
-
-   xcb::warp_pointer(&conn, XCB_NONE, XCB_NONE, 0 as i16, 0 as i16,  0 as u16, 0 as u16, x as i16, y as i16).request_check().unwrap();
+fn warp(x: i32, y: i32, conn: &Connection) {
+    xcb::warp_pointer(
+        conn, XCB_NONE, XCB_NONE, 0 as i16, 0 as i16, 0 as u16, 0 as u16, x as i16, y as i16,
+    )
+    .request_check()
+    .unwrap();
 }
 
-fn get_pointer_coordinates() -> (i32, i32) {
-    let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
+fn get_pointer_coordinates(conn: &mut Connection, screen_num: i32) -> (i32, i32) {
     let setup = conn.get_setup();
     let screen = setup.roots().nth(screen_num as usize).unwrap();
     let root_id = screen.root();
@@ -193,18 +198,16 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // (ihope-iiuc)
     // "Can't eat a lent cake"-error
     // We can however make the raw into a normal &mut
-    let pdata = vpdata as *mut CaretTowState;
+    let pdata = vpdata as *mut Triol;
     let data = unsafe { &mut *pdata };
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     let caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
-    let event_source_name: *const ::std::os::raw::c_char =
-        unsafe { (*(*event).source).name } as *const ::std::os::raw::c_char;
 
     // 'Detail1' might be the bew index of caret-moved, though due to async implementation in the library,
     // may well not be consistent with current state.
     // https://accessibility.linuxfoundation.org/a11yspecs/atspi/adoc/atspi-events.html
 
-    if unsafe { !(*event).detail1 >= 1 } {
+    if unsafe { !(*event).detail1 == 1 } {
         return;
     } //  ( Be some index, otherwise bail )
 
@@ -215,7 +218,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     let glyph_extents = unsafe {
         atspi_text_get_character_extents(
             text_iface,
-            caret_offset - 1,
+            caret_offset,
             ATSPI_COORD_TYPE_SCREEN,
             null_mut(), // GError
         )
@@ -237,8 +240,11 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 
     // Rust will assure we'll never consume the borrowed cts: cts_curr
     // We end up with a '&mut &mut', Can we do a single &mut?
-    let mut cts_curr = data;
-    let pointer_coordinates = get_pointer_coordinates();
+    let mut cts_curr = &mut data.0;
+    let conn = &mut (data.1).0;
+    let screen_num = (data.1).1;
+
+    let pointer_coordinates = get_pointer_coordinates(conn, screen_num);
 
     let periodically = |dur, cts_curr: &mut &mut CaretTowState| {
         match cts_curr.timestamp {
@@ -251,7 +257,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
                 let dx: i32 = caret_coords_now.0 - cts_curr.glyph_coords_begin.0;
                 let dy: i32 = caret_coords_now.1 - cts_curr.glyph_coords_begin.1;
                 cts_curr.reset();
-                do_tow(dx, dy);
+                do_tow(dx, dy, &conn);
                 return;
             }
             None => {
@@ -288,7 +294,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
                 let dx: i32 = caret_coords_now.0 - cts_curr.glyph_coords_begin.0;
                 let dy: i32 = caret_coords_now.1 - cts_curr.glyph_coords_begin.1;
                 cts_curr.reset();
-                do_tow(dx, dy);
+                do_tow(dx, dy, &conn);
                 return;
             }
         }
@@ -300,18 +306,18 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             cts_curr.glyph_coords_begin = caret_coords_now;
             cts_curr.pointer_at_begin = pointer_coordinates;
         } else {
-            let x = caret_coords_now.0 - cts_curr.glyph_coords_begin.0;
-            let y = caret_coords_now.1 - cts_curr.glyph_coords_begin.1;
-            warp(x, y);
+            let x = 2 * (caret_coords_now.0 - cts_curr.glyph_coords_begin.0);
+            let y = 2 * (caret_coords_now.1 - cts_curr.glyph_coords_begin.1);
+            warp(x, y, &conn);
             cts_curr.reset();
             return;
         }
     };
 
     match cts_curr.behavior {
-        Behavior::Periodically { dur } => periodically(dur, &mut cts_curr),
-        Behavior::By_Characters { nc } => every_so_much_characters(nc, &mut cts_curr),
-        Behavior::Typewriter => every_other_character(&mut cts_curr),
+        Behavior::Periodically { dur } => periodically(dur, &mut &mut cts_curr),
+        Behavior::By_Characters { nc } => every_so_much_characters(nc, &mut &mut cts_curr),
+        Behavior::Typewriter => every_other_character(&mut &mut cts_curr),
     };
 }
 
@@ -341,6 +347,9 @@ fn main() {
     let manner = Behavior::Typewriter;
     // let manner = Behavior::By_Characters { nc: 15 };
 
+    let mut xcb_conn: (Connection, i32) =
+        xcb::Connection::connect(None).expect("Failed xcb connection.");
+
     // Shared state between CBs
     let mut cts: CaretTowState = CaretTowState {
         counter: 0,
@@ -353,13 +362,15 @@ fn main() {
         behavior: manner,
     };
 
+    let mut trio: Triol = (&mut cts, (&mut xcb_conn.0, xcb_conn.1));
+
     // In data, the state is borrowed (to avoid consumption )
     // This means the CB must return before the new event happens for
     // the state to be a coherent reflection of affairs.
     // Iow: we might miss events (characters) if we do not return in time.
 
-    let data = &mut cts;
-    let vpdata = data as *mut CaretTowState as *mut libc::c_void;
+    let data = &mut trio;
+    let vpdata = data as *mut Triol as *mut libc::c_void;
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
     let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
 
@@ -370,8 +381,6 @@ fn main() {
     if unsafe { atspi_init() } != 0 {
         panic!("Could not initialise AT-SPI.");
     }
-
-    // "object:event-from-input"
 
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")

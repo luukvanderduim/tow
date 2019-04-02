@@ -12,7 +12,7 @@ however it might work with other desktop environments as well.
 Your mileage may vary.
 
 Tow seeks to scratch an itch some users who depend on the zoom
-featuremay have with the zoom feature of xfwm4.
+feature may have while working with zoom.
 
 ## Problem description
  The user directs the zoom view port to some (text input)
@@ -31,14 +31,12 @@ featuremay have with the zoom feature of xfwm4.
  be 'towed' by the caret.
 
 TO DO:
-- It works somewhat, but it has (many) flaws
--
-Events may be missed, thus the mover may heve incomplete knowledge.
- We can be smarter than this! ;)
+- It works somewhat, but it has (many) flaws.
+  It is by no means 'stable' let alone 'done', far from a release.
 
--  move by periodically as opposed to current per 10 characters moved
--  fix moving backwards and up
--
+Events may be missed, we may have 'false positive' caret move events
+There is unwanted behavior
+
  - non blocking mover.
  - detect and 'play nice' with policy kit.
  - ..
