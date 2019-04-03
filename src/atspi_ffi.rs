@@ -85,8 +85,8 @@ pub type AtspiRect = _AtspiRect;
 pub struct _AtspiRect {
     pub x: gint,
     pub y: gint,
-    width: gint,
-    height: gint,
+    pub width: gint,
+    pub height: gint,
 }
 type guint32 = ::std::os::raw::c_uint;
 type GQuark = guint32;
