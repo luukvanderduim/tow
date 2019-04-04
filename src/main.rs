@@ -25,7 +25,6 @@ however it might work with other desktop environments aswell.
 */
 // #![warn(clippy::all)]
 #![feature(extern_types)]
-//#![allow(unused_imports)]
 #![allow(non_camel_case_types)]
 
 use daemonize::Daemonize;
@@ -37,10 +36,10 @@ use libc;
 use std::f64::consts::E;
 use std::ffi::CString;
 use std::fs::File;
+use std::ops::{Add, Sub};
 use std::time::{Duration, Instant};
 use xcb;
 use xcb::base::Connection;
-use std::ops::{Add, Sub};
 
 mod atspi_ffi;
 use atspi_ffi::*;
@@ -52,60 +51,54 @@ const XCB_NONE: u32 = 0;
 type Triol<'a> = (&'a mut CaretTowState, &'a mut xcb::base::Connection, i32);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-struct Point ( i32, i32 );
+struct Point(i32, i32);
 
 impl Add for Point {
     type Output = Point;
 
     fn add(self, other: Point) -> Point {
-        Point (
-             self.0 + other.0,
-             self.1 + other.1,
-        )
+        Point(self.0 + other.0, self.1 + other.1)
     }
 }
 impl Sub for Point {
     type Output = Point;
 
     fn sub(self, other: Point) -> Point {
-        Point (
-             self.0 - other.0,
-             self.1 - other.1,
-        )
+        Point(self.0 - other.0, self.1 - other.1)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
-    counter: u64, // Thats a lot of events
+    counter: u64, // CHANGE INTO WRAPPING TYPE?!
     timestamp: Option<Instant>,
-    pointer_at_begin: Point,
-    glyph_coords_end: Point,
-    glyph_coords_begin: Point,
+    pointer_at_begin: Option<Point>,
+    glyph_coords_end: Option<Point>,
+    glyph_coords_begin: Option<Point>,
     behavior: Behavior,
     pointer_caret_offset: Point, // offset is semantically not a Point
 }
 impl CaretTowState {
     fn reset(&mut self) {
         self.counter = 0;
-        self.timestamp = None;
-        self.pointer_at_begin = Point(0,0);
-        self.glyph_coords_end = Point(0,0);
-        self.glyph_coords_begin = Point(0,0);
+        self.timestamp = Some(Instant::now());
+        self.pointer_at_begin = None;
+        self.glyph_coords_end = None;  // Cant this be removed?
+        self.glyph_coords_begin = None;
     }
     fn advance(&mut self, l: Point) {
         self.counter += 1;
-        self.glyph_coords_begin = l;
+        self.glyph_coords_begin = Some(l);
     }
     fn pointer_offset(&mut self) {
-        self.pointer_caret_offset = self.glyph_coords_begin - self.pointer_at_begin;
+        self.pointer_caret_offset = self.glyph_coords_begin.unwrap() - self.pointer_at_begin.unwrap();
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Behavior {
-    Periodically { dur: Duration },
-    By_Characters { nc: u8 },
+    Interval { dur: Duration },
+    perNum { nc: u8 },
     Typewriter,
 }
 
@@ -175,7 +168,7 @@ fn do_tow(dx: i32, dy: i32, conn: &Connection, screen_num: i32, begin: Point) {
                 x + xmove_amount.trunc() as i32,
                 y + ymove_amount.trunc() as i32,
                 conn,
-                screen_num
+                screen_num,
             );
             x += xmove_amount.trunc() as i32;
             y += ymove_amount.trunc() as i32;
@@ -238,16 +231,13 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // We can however make the raw into a normal &mut
     let pdata = vpdata as *mut Triol;
     let data = unsafe { &mut *pdata };
+
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     let caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
     // 'Detail1' might be the bew index of caret-moved, though due to async implementation in the library,
     // may well not be consistent with current state.
     // https://accessibility.linuxfoundation.org/a11yspecs/atspi/adoc/atspi-events.html
-
-    if unsafe { (*event).detail1 < 0 } {
-        return;
-    } //  ( Be some index / offset, otherwise bail )
 
     // Because we cannot ask for the co-ordinates of the caret directly,
     // we ask for the bounding box of the glyph at the caret offset.
@@ -271,28 +261,34 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     let pointer_coordinates: Point = get_pointer_coordinates(conn, screen_num);
 
     let periodically = |dur, cts_curr: &mut &mut CaretTowState| {
+        if cts_curr.pointer_at_begin.unwrap() != pointer_coordinates {
+            cts_curr.reset();
+            cts_curr.pointer_at_begin = Some(pointer_coordinates);
+            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+            return;
+        }
+
         match cts_curr.timestamp {
             Some(timestamp) if timestamp.elapsed() < dur => {
-                if cts_curr.pointer_at_begin != pointer_coordinates {
-                    cts_curr.reset();
-                }
                 return;
             }
             Some(timestamp) if timestamp.elapsed() >= dur => {
                 do_tow(
-                    caret_coords_now.0 - cts_curr.glyph_coords_begin.0,
-                    caret_coords_now.1 - cts_curr.glyph_coords_begin.1,
+                    caret_coords_now.0 - cts_curr.glyph_coords_begin.unwrap().0,
+                    caret_coords_now.1 - cts_curr.glyph_coords_begin.unwrap().1,
                     &conn,
                     screen_num,
-                    cts_curr.glyph_coords_begin
+                    cts_curr.glyph_coords_begin.unwrap(),
                 );
                 cts_curr.reset();
+                cts_curr.pointer_at_begin = Some(pointer_coordinates);
+                cts_curr.glyph_coords_begin = Some(caret_coords_now);
                 return;
             }
             None => {
-                cts_curr.timestamp = Some(Instant::now());
-                cts_curr.pointer_at_begin = pointer_coordinates;
-                cts_curr.glyph_coords_begin = caret_coords_now;
+                cts_curr.reset();
+                cts_curr.pointer_at_begin = Some(pointer_coordinates);
+                cts_curr.glyph_coords_begin = Some(caret_coords_now);
                 return;
             }
             Some(_) => {
@@ -306,43 +302,45 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // and with it the view port.
 
     let every_so_much_characters = |nc, cts_curr: &mut &mut CaretTowState| {
+        if cts_curr.pointer_at_begin.unwrap() != pointer_coordinates {  // We dared to move the pointer tssk
+            cts_curr.reset();
+            cts_curr.pointer_at_begin = Some(pointer_coordinates);
+            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+            return;
+        }
+
         if cts_curr.counter == 0 {
             cts_curr.counter = 1;
-            cts_curr.pointer_at_begin = pointer_coordinates;
-            cts_curr.glyph_coords_end = caret_coords_now;
-            cts_curr.glyph_coords_begin = caret_coords_now;
+            cts_curr.pointer_at_begin = Some(pointer_coordinates);
+            cts_curr.glyph_coords_end = Some(caret_coords_now);  // REALLY?
+            cts_curr.glyph_coords_begin = Some(caret_coords_now);
             cts_curr.pointer_offset();
-        } else if cts_curr.counter > 0 && cts_curr.counter <= nc {
-            if cts_curr.pointer_at_begin != pointer_coordinates {
-                cts_curr.reset();
-            } else {
-                cts_curr.advance(caret_coords_now);
-            }
+            return;
+        } else if cts_curr.counter > 0 && cts_curr.counter < nc {
+            cts_curr.advance(caret_coords_now);
+            return;
         } else {
-            if cts_curr.pointer_at_begin != pointer_coordinates {
-                cts_curr.reset();
-            } else {
-                do_tow(
-                (caret_coords_now.0 - cts_curr.glyph_coords_begin.0),
-                (caret_coords_now.1 - cts_curr.glyph_coords_begin.1),
-                    &conn,
-                    screen_num,
-                    cts_curr.glyph_coords_begin
-                );
-                cts_curr.reset();
-            }
+            do_tow(
+                (caret_coords_now.0 - cts_curr.glyph_coords_begin.unwrap().0),
+                (caret_coords_now.1 - cts_curr.glyph_coords_begin.unwrap().1),
+                &conn,
+                screen_num,
+                cts_curr.glyph_coords_begin.unwrap(),
+            );
+            cts_curr.reset();
+            cts_curr.pointer_at_begin = Some(pointer_coordinates);
+            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+            return;
         }
-        return;
     };
 
     let mut every_other_character = |cts_curr: &mut &mut CaretTowState| {
         if cts_curr.counter == 0 {
             cts_curr.counter = 1;
-            cts_curr.glyph_coords_begin = caret_coords_now;
-            cts_curr.pointer_at_begin = pointer_coordinates;
+            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+            cts_curr.pointer_at_begin = Some(pointer_coordinates);
             cts_curr.pointer_offset();
         } else {
-
             warp_abs(
                 caret_coords_now.0 - (cts_curr.pointer_caret_offset.0).abs(),
                 caret_coords_now.1 - (cts_curr.pointer_caret_offset.1).abs(),
@@ -355,8 +353,8 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     };
 
     match cts_curr.behavior {
-        Behavior::Periodically { dur } => periodically(dur, &mut &mut cts_curr),
-        Behavior::By_Characters { nc } => every_so_much_characters(nc as u64, &mut &mut cts_curr),
+        Behavior::Interval { dur } => periodically(dur, &mut &mut cts_curr),
+        Behavior::perNum { nc } => every_so_much_characters(nc as u64, &mut &mut cts_curr),
         Behavior::Typewriter => every_other_character(&mut &mut cts_curr),
     };
 }
@@ -381,27 +379,27 @@ fn spookify_tow() {
 
 fn main() {
     // spookify_tow();
-     let manner = Behavior::Periodically {
+    let mode = Behavior::Interval {
         dur: Duration::from_millis(2000),
     };
-    //let manner = Behavior::Typewriter;
-    // let manner = Behavior::By_Characters { nc: 15 };
+    // let mode = Behavior::Typewriter;
+    // let mode = Behavior::perNum { nc: 15 };
 
-    let mut xcb_conn: (Connection, i32) =
+    let (mut conn, screen_num) =
         xcb::Connection::connect(None).expect("Failed xcb connection.");
 
     // Shared state between CBs
     let mut cts: CaretTowState = CaretTowState {
         counter: 0,
-        timestamp: None,
-        pointer_caret_offset: Point(0, 0),
-        pointer_at_begin: Point(0, 0),
-        glyph_coords_end: Point(0, 0),
-        glyph_coords_begin: Point(0, 0),
-        behavior: manner,
+        timestamp: Some(std::time::Instant::now()),
+        pointer_caret_offset: Point(0,0),
+        pointer_at_begin: Some(get_pointer_coordinates(&mut conn, screen_num)),
+        glyph_coords_begin: None,
+        glyph_coords_end: None,
+        behavior: mode,
     };
 
-    let mut trio: Triol = (&mut cts, &mut xcb_conn.0, xcb_conn.1);
+    let mut trio: Triol = (&mut cts, &mut conn, screen_num);
 
     // In data, the state is borrowed (to avoid consumption )
     // This means the CB must return before the new event happens for
