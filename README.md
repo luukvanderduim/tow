@@ -14,49 +14,94 @@ Your mileage may vary.
 Tow seeks to scratch an itch some users who depend on the zoom
 feature may have while working with zoom.
 
-## Problem description
- The user directs the zoom view port to some (text input)
- area by means of eg. the mouse. ( or any other pointer device ).
+## Problem
+ The user directs the zoomed view port position with the pointer device.
+ (eg. the mouse, or any other pointer device.)
 
  Typically both hands are in use when typing and most users
  have no more than two hands.
- While entering text, the caret moves, yet the zoom view stays put.
+ Whilst entering text, the caret moves, yet the zoomed view port stays put.
  Quickly the caret will be out of sight and the user now has to
  interrupt work to readjust the pointer position to once again have
  the zoomed view port match the caret's current position.
- But not for long.
+
+ This pattern will repeat and becomes a nuisance to some.
+
+ for those people I wrote tow.
 
 ## The solution
  Tow aims to automate the readjusting by having the zoom view port
  be 'towed' by the caret.
 
-TO DO:
-- It works somewhat, but it has (many) flaws.
-  It is by no means 'stable' let alone 'done', far from a release.
+## Usage:
 
-Events may be missed, we may have 'false positive' caret move events
-There is unwanted behavior
+    tow [FLAGS] [OPTIONS]
 
- - non blocking mover.
- - detect and 'play nice' with policy kit.
- - ..
+FLAGS:
+    -D, --daemon     Have tow be 'daemonized' / run in the background.
+    -h, --help       Prints help information
+    -V, --version    Prints version information
 
-## How to use
+OPTIONS:
+    -b, --behavior <behavior>          Mode: charcnt [N:2-100] (# chars), interval [N: 100-10000] (ms) or typewriter
+                                       (default)
+    -s, --slide_duration <slidedur>    Duration of view port slide in ms [100-10000] only applies to charcnt and
+                                       interval modes, otherwise ignored [default: 500]
+
+
+## TO DO:
+- It works but it has (many) flaws.
+
+    Tow is not stable, let alone ready for a release.
+
+    The main problems as of [2019-04-08]:
+
+    Tow needs a safe wrapper for its ffi use.
+    I am pretty sure that in its current state tow is leaking memory.
+    Memory management is currently poorly understood by its author.
+
+    it also needs a runtime on/off hotkey.
+Some programs do not implement accessibility as intended, this may lead to unwanted behavior.
+Therefore we need and option to opt-out during runtime.
+
+    We probably want to save settings.
+
+    Even though we have greatly improved event handling speed, events can still be missed (at-spi2 may decide to drop events) and we may have 'false positive' caret-moved events - these may cause unwanted behavior.
+
+    The 'interval' mode may get its own worker thread to do interval accounting and moving.
+    Currently [2019-04-08] we move at the event that came later than the duration of the set interval.
+    The current implementation makes the interval duration less meaningful.
+
+    Detect and 'play nice' with policy kit.
+    Which may be as simple as prefixing with pk-exec?
+
+## Installation
 
 prerequisites include
 . Rust development toolchain.
-. libatspi
+. at-spi2-core
 
  $ git clone https://github.com/luukvanderduim/tow.git
  $ cd tow
  $ cargo build --release
  $ cargo run --release
-
- tow is a daemon and currently has no way to gracefully exit.
- So you may want to kill it when done experimenting with it.
+ or
+ $ cargo install --path .  (add --force on subsequent invocation)
+ $ tow
 
 ## Contributions
 
  Yes, please!
 
- (Keep in mind all code contributed will be licenced like tow is.)
+ If you can fix problems with tow, or
+ fix problems with other programs that do not implement Atk correctly.
+
+ I would really love to see VSCode emit caret-moved events.
+ I had expected Thunderbird to do better.
+
+ Thank you so much in advance.
+
+## Licence
+
+This software is licenced MPL 2.0
+Please see the LICENCE file.

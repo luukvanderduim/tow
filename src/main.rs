@@ -1,32 +1,22 @@
-/*   Copyright 2019 Luuk van der Duim
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to use,
-copy, modify, merge, ish, distribute, sublicense, and/or sell copies of the
-Software, and to permit persons to whom the Software is furnished to do so, subject
-to the following conditions:
+/// Tow
+/// an ergonomy utility for desktop zoom users.
+/// tow has the zoom area be towed by the keyboard caret.
+/// It is made with the Xfce4 desktop in mind,
+/// however it might work with other desktop environments aswell.
 
-The above copyright notice and this permission notice shall be included in all copies
-or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
-FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE. */
-
-/*
-tow: an ergonomy helper for desktop zoom users.
-tow has the zoom area be 'towed by the keyboard caret'.
-It is made with the Xfce4 desktop in mind,
-however it might work with other desktop environments aswell.
-*/
-// #![warn(clippy::all)]
+#![warn(clippy::all)]
 #![feature(extern_types)]
 #![allow(non_camel_case_types)]
 
+#[macro_use]
+extern crate clap;
+
+use clap::{App, AppSettings, Arg};
 use daemonize::Daemonize;
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
@@ -42,7 +32,7 @@ use xcb::base::Connection;
 mod atspi_ffi;
 use atspi_ffi::*;
 
-const SLIDE_DUR: Duration = Duration::from_millis(500);
+static mut SLIDE_DUR: Duration = Duration::from_millis(500);
 const FRAME_DUR: Duration = Duration::from_millis(1000 / 60);
 const XCB_NONE: u32 = 0;
 
@@ -86,8 +76,14 @@ impl CaretTowState {
     }
     fn pointer_offset(&mut self) {
         self.pointer_caret_offset = (
-            self.glyph_coords_begin.unwrap().0 - self.pointer_at_begin.unwrap().0,
-            self.glyph_coords_begin.unwrap().1 - self.pointer_at_begin.unwrap().1,
+            self.glyph_coords_begin
+                .expect("no glyph begin coords found")
+                .0
+                - self.pointer_at_begin.expect("no pointer coords found").0,
+            self.glyph_coords_begin
+                .expect("no glyph begin coords found")
+                .1
+                - self.pointer_at_begin.expect("no pointer coords found").1,
         );
     }
 }
@@ -103,9 +99,10 @@ enum Behavior {
 // get_sigmoid makes us a S-shaped graph data
 // a fluent slope within certain bounds
 fn get_sigmoid() -> Vec<f64> {
-    let frames_per_slide = ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
-        / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64))
-        as f64;
+    let frames_per_slide = unsafe {
+        ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
+            / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64)) as f64
+    };
     let dx: f64 = 1.0 / (frames_per_slide * 0.5);
     let sigmoid: Vec<f64> = (0..1000)
         .step_by((dx * f64::from(1000)) as usize)
@@ -179,13 +176,16 @@ fn do_tow(dx: i32, dy: i32, conn: &Connection, screen_num: i32, begin: Point) {
 
 fn warp_abs(x: i32, y: i32, conn: &Connection, screen_num: i32) {
     let setup = conn.get_setup();
-    let screen = setup.roots().nth(screen_num as usize).unwrap();
+    let screen = setup
+        .roots()
+        .nth(screen_num as usize)
+        .expect("Can't get screen.");
     let root_id = screen.root();
     xcb::warp_pointer(
         conn, XCB_NONE, root_id, 0 as i16, 0 as i16, 0 as u16, 0 as u16, x as i16, y as i16,
     )
     .request_check()
-    .unwrap();
+    .expect("Warp pointer check failed?");
 }
 
 fn warp_rel(x: i32, y: i32, conn: &Connection) {
@@ -193,12 +193,15 @@ fn warp_rel(x: i32, y: i32, conn: &Connection) {
         conn, XCB_NONE, XCB_NONE, 0 as i16, 0 as i16, 0 as u16, 0 as u16, x as i16, y as i16,
     )
     .request_check()
-    .unwrap();
+    .expect("Check in warp-rel failed!");
 }
 
 fn get_pointer_coordinates(conn: &Connection, screen_num: i32) -> Point {
     let setup = conn.get_setup();
-    let screen = setup.roots().nth(screen_num as usize).unwrap();
+    let screen = setup
+        .roots()
+        .nth(screen_num as usize)
+        .expect("Cannot get screen!");
     let root_id = screen.root();
 
     let pointercookie = xcb::xproto::query_pointer(&conn, root_id);
@@ -217,26 +220,18 @@ extern "C" fn destroy_evgarbage(data: gpointer) {
     unsafe { libc::free(data) };
 }
 
-extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw::c_void) {
+extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
     use std::ptr::null_mut;
 
-    // We can convert the pointer-type of vpdate
-    // but cannot dereference
-    // due to violation of the borrowed nature of its contents.
-    // (ihope-iiuc)
-    // "Can't eat a lent cake"-error
-    // We can however make the raw into a normal &mut
+    // The pointer was a borrow &mut, when the listener took it.
+    // We cannot eat a lent cake, so we cannot dereference the pointer.
 
-    let pdata = vpdata as *mut (CaretTowState, xcb::base::Connection, i32);
+    let pdata = voidptr_data as *mut (CaretTowState, xcb::base::Connection, i32);
 
     let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     let caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
 
-    // 'Detail1' might be the bew index of caret-moved, though due to async implementation in the library,
-    // may well not be consistent with current state.
-    // https://accessibility.linuxfoundation.org/a11yspecs/atspi/adoc/atspi-events.html
-
-    // Because we cannot ask for the co-ordinates of the caret directly,
+    // Because we cannot ask for the coordinates of the caret directly,
     // we ask for the bounding box of the glyph at the caret offset.
     let glyph_extents = unsafe {
         atspi_text_get_character_extents(
@@ -252,15 +247,13 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
         return;
     }
 
-    // Rust will assure we'll never consume the borrowed cts: cts_curr
-    // We end up with a '&mut &mut', Can we do better?
+    // Rust will assure we'll never consume the lent cake, however we are allowed to destructure it!
 
-    let (cts_curr, conn, screen_num) = unsafe { pdata.as_mut().unwrap() };
-
+    let (cts_curr, conn, screen_num) = unsafe { pdata.as_mut().expect("NULL pointer passed!") };
     let pointer_coordinates: Point = get_pointer_coordinates(conn, *screen_num);
 
     let periodically = |dur, cts_curr: &mut CaretTowState| {
-        if cts_curr.pointer_at_begin.unwrap() != pointer_coordinates {
+        if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
             cts_curr.reset();
             cts_curr.pointer_at_begin = Some(pointer_coordinates);
             cts_curr.glyph_coords_begin = Some(caret_coords_now);
@@ -273,11 +266,13 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             }
             Some(timestamp) if timestamp.elapsed() >= dur => {
                 do_tow(
-                    caret_coords_now.0 - cts_curr.glyph_coords_begin.unwrap().0,
-                    caret_coords_now.1 - cts_curr.glyph_coords_begin.unwrap().1,
+                    caret_coords_now.0
+                        - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").0,
+                    caret_coords_now.1
+                        - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").1,
                     conn,
                     *screen_num,
-                    cts_curr.glyph_coords_begin.unwrap(),
+                    cts_curr.glyph_coords_begin.expect("cts: no glyph begin"),
                 );
                 cts_curr.reset();
                 cts_curr.pointer_at_begin = Some(pointer_coordinates);
@@ -301,7 +296,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
     // and with it the view port.
 
     let every_so_much_characters = |nc, cts_curr: &mut CaretTowState| {
-        if cts_curr.pointer_at_begin.unwrap() != pointer_coordinates {
+        if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
             // We dared to move the pointer tssk
             cts_curr.reset();
             cts_curr.pointer_at_begin = Some(pointer_coordinates);
@@ -320,11 +315,11 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
             return;
         } else {
             do_tow(
-                caret_coords_now.0 - cts_curr.glyph_coords_begin.unwrap().0,
-                caret_coords_now.1 - cts_curr.glyph_coords_begin.unwrap().1,
+                caret_coords_now.0 - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").0,
+                caret_coords_now.1 - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").1,
                 conn,
                 *screen_num,
-                cts_curr.glyph_coords_begin.unwrap(),
+                cts_curr.glyph_coords_begin.expect("cts: no glyph begin"),
             );
             cts_curr.reset();
             cts_curr.pointer_at_begin = Some(pointer_coordinates);
@@ -333,7 +328,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
         }
     };
 
-    let mut each_character = |cts_curr: &mut CaretTowState| {
+    let each_character = |cts_curr: &mut CaretTowState| {
         let x = caret_coords_now.0 - 12;
         let y = caret_coords_now.1 - 15;
         warp_abs(x, y, conn, *screen_num);
@@ -348,8 +343,8 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, vpdata: *mut ::std::os::raw:
 }
 
 fn spookify_tow() {
-    let stdout = File::create("/tmp/tow-daemon.out").unwrap();
-    let stderr = File::create("/tmp/tow-daemon.err").unwrap();
+    let stdout = File::create("/tmp/tow-daemon.out").expect("daemonize: cannot creat stdout file");
+    let stderr = File::create("/tmp/tow-daemon.err").expect("daemonize: cannot creat stderr file");
 
     let daemonize = Daemonize::new()
         .pid_file("/tmp/tow.pid") // Every method except `new` and `start`
@@ -366,34 +361,103 @@ fn spookify_tow() {
 }
 
 fn main() {
-    // spookify_tow();
-    let mode = Behavior::Interval {
-        dur: Duration::from_millis(1000),
-    };
-    //  let mode = Behavior::Typewriter;
-    // let mode = Behavior::perNum { nc: 15 };
-
-    let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
-
-    // Shared state between CBs
+    // Passed around state
     let mut cts: CaretTowState = CaretTowState {
         counter: 0,
         timestamp: Some(std::time::Instant::now()),
         pointer_caret_offset: (0, 0),
-        pointer_at_begin: Some(get_pointer_coordinates(&conn, screen_num)),
+        pointer_at_begin: None,
         glyph_coords_begin: None,
-        behavior: mode,
+        behavior: Behavior::Typewriter,
     };
+
+    let matches = App::new("Tow")
+        .version(crate_version!())
+        .author("Luuk van der Duim <luukvanderduim@gmail.com>")
+        .arg(
+            Arg::with_name("daemon")
+                .short("D")
+                .long("daemon")
+                .takes_value(false)
+                .help("Have tow be 'daemonized' / run in the background."),
+        )
+        .arg(
+            Arg::with_name("slidedur")
+                .short("s")
+                .long("slide_duration")
+                .takes_value(true)
+                .default_value("500")
+                .help("Duration of view port slide in ms [100-10000] only applies to charcnt and interval modes, otherwise ignored"),
+        )
+        .arg(Arg::with_name("behavior")
+            .short("b")
+            .long("behavior")
+            //.default_value("typewriter")
+            .takes_value(true)
+            .help("Mode: charcnt [N:2-100] (# chars), interval [N: 100-10000] (ms) or typewriter (default)")
+            .max_values(2))
+        .get_matches();
+
+    if matches.is_present("daemon") {
+        spookify_tow();
+    }
+
+    if matches.is_present("behavior") {
+        let mut bvals = matches.values_of("behavior").expect("Unexpected!");
+        match bvals.next() {
+            Some("charcnt") => {
+                if let Some(numb) = bvals.next() {
+                    let n = numb.parse::<u8>().expect("u8 parse error");
+                    {
+                        if n > 1 && n <= 100 {
+                            cts.behavior = Behavior::perNum { nc: n as u32 };
+                        }
+                    }
+                }
+            }
+            Some("interval") => {
+                if let Some(numb) = bvals.next() {
+                    let n = numb.parse::<u16>().expect("u16 parse error");
+                    {
+                        if n >= 100 && n <= 10000 {
+                            cts.behavior = Behavior::Interval {
+                                dur: Duration::from_millis(n as u64),
+                            };
+                        }
+                    }
+                }
+            }
+            Some("typewriter") => {
+                cts.behavior = Behavior::Typewriter;
+            }
+            Some(&_) => {
+                eprintln!("Error: Invalid behavior value. Typo?");
+            }
+            None => {
+                eprintln!("Error: Invalid behavior value.");
+            }
+        }
+
+        if let Some(s) = matches.value_of("slidedur") {
+            let val: u64 = s.parse::<u64>().expect("Not a valid duration (see -h).");
+            if val <= 10000 && val >= 100 {
+                unsafe { SLIDE_DUR = Duration::from_millis(val) };
+            }
+        }
+    }
+
+    let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
+    cts.pointer_at_begin = Some(get_pointer_coordinates(&conn, screen_num));
 
     let mut triplet = (cts, conn, screen_num);
 
-    let vpdata =
+    let voidptr_data =
         &mut triplet as *mut (CaretTowState, xcb::base::Connection, i32) as *mut libc::c_void;
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
-    let evdestroygarb: GDestroyNotify = Some(destroy_evgarbage);
+    let post_event_chores: GDestroyNotify = Some(destroy_evgarbage);
 
     // AT-SPI event listener
-    let listener = unsafe { atspi_event_listener_new(evfn, vpdata, evdestroygarb) };
+    let listener = unsafe { atspi_event_listener_new(evfn, voidptr_data, post_event_chores) };
 
     // AT-SPI init
     if unsafe { atspi_init() } != 0 {
@@ -418,9 +482,9 @@ fn main() {
     }
 
     unsafe {
-        gobject_sys::g_object_unref(err as *mut gobject_sys::GObject);
-        gobject_sys::g_object_unref(evtype as *mut gobject_sys::GObject);
+        gobject_sys::g_object_unref(err as *mut gobject_sys::GObject); // as GError
+        gobject_sys::g_object_unref(evtype as *mut gobject_sys::GObject); // as
         gobject_sys::g_object_unref(listener as *mut gobject_sys::GObject);
-        gobject_sys::g_object_unref(vpdata as *mut gobject_sys::GObject);
+        gobject_sys::g_object_unref(voidptr_data as *mut gobject_sys::GObject);
     }
 }
