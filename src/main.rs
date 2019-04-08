@@ -1,17 +1,16 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+* file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+#![warn(clippy::all)]
+#![feature(extern_types)]
+#![allow(non_camel_case_types)]
 
 /// Tow
 /// an ergonomy utility for desktop zoom users.
 /// tow has the zoom area be towed by the keyboard caret.
 /// It is made with the Xfce4 desktop in mind,
 /// however it might work with other desktop environments aswell.
-
-
-#![warn(clippy::all)]
-#![feature(extern_types)]
-#![allow(non_camel_case_types)]
 
 #[macro_use]
 extern crate clap;
@@ -33,7 +32,7 @@ mod atspi_ffi;
 use atspi_ffi::*;
 
 static mut SLIDE_DUR: Duration = Duration::from_millis(500);
-const FRAME_DUR: Duration = Duration::from_millis(1000 / 60);
+const FRAME_DUR: Duration = Duration::from_millis(1000 / 30);
 const XCB_NONE: u32 = 0;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -253,6 +252,10 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     let pointer_coordinates: Point = get_pointer_coordinates(conn, *screen_num);
 
     let periodically = |dur, cts_curr: &mut CaretTowState| {
+        if !cts_curr.glyph_coords_begin.is_some() {
+            cts_curr.glyph_coords_begin = Some(caret_coords_now)
+        }
+
         if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
             cts_curr.reset();
             cts_curr.pointer_at_begin = Some(pointer_coordinates);
@@ -408,22 +411,31 @@ fn main() {
             Some("charcnt") => {
                 if let Some(numb) = bvals.next() {
                     let n = numb.parse::<u8>().expect("u8 parse error");
-                    {
-                        if n > 1 && n <= 100 {
-                            cts.behavior = Behavior::perNum { nc: n as u32 };
-                        }
+                    if n <= 1 {
+                        cts.behavior = Behavior::Typewriter;
+                    } else if n > 1 && n <= 100 {
+                        cts.behavior = Behavior::perNum { nc: n as u32 };
+                    } else {
+                        cts.behavior = Behavior::perNum { nc: 100 };
                     }
                 }
             }
             Some("interval") => {
                 if let Some(numb) = bvals.next() {
                     let n = numb.parse::<u16>().expect("u16 parse error");
-                    {
-                        if n >= 100 && n <= 10000 {
-                            cts.behavior = Behavior::Interval {
-                                dur: Duration::from_millis(n as u64),
-                            };
-                        }
+                    if n <= 99 {
+                        cts.behavior = Behavior::Interval {
+                            dur: Duration::from_millis(100),
+                        };
+                    }
+                    if n >= 100 && n <= 10000 {
+                        cts.behavior = Behavior::Interval {
+                            dur: Duration::from_millis(n as u64),
+                        };
+                    } else {
+                        cts.behavior = Behavior::Interval {
+                            dur: Duration::from_millis(10000),
+                        };
                     }
                 }
             }
