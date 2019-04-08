@@ -90,7 +90,7 @@ impl CaretTowState {
 #[derive(Clone, Copy, Debug)]
 enum Behavior {
     Interval { dur: Duration },
-    perNum { nc: u32 },
+    PerQty { nc: u32 },
     Typewriter,
 }
 
@@ -249,13 +249,14 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     // Rust will assure we'll never consume the lent cake, however we are allowed to destructure it!
 
     let (cts_curr, conn, screen_num) = unsafe { pdata.as_mut().expect("NULL pointer passed!") };
+
+    if !cts_curr.glyph_coords_begin.is_some() {
+        cts_curr.glyph_coords_begin = Some(caret_coords_now)
+    }
+
     let pointer_coordinates: Point = get_pointer_coordinates(conn, *screen_num);
 
     let periodically = |dur, cts_curr: &mut CaretTowState| {
-        if !cts_curr.glyph_coords_begin.is_some() {
-            cts_curr.glyph_coords_begin = Some(caret_coords_now)
-        }
-
         if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
             cts_curr.reset();
             cts_curr.pointer_at_begin = Some(pointer_coordinates);
@@ -298,7 +299,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     // - somewhere between 0..X the pointer is moved
     // and with it the view port.
 
-    let every_so_much_characters = |nc, cts_curr: &mut CaretTowState| {
+    let every_n_characters = |nc, cts_curr: &mut CaretTowState| {
         if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
             // We dared to move the pointer tssk
             cts_curr.reset();
@@ -340,7 +341,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
 
     match cts_curr.behavior {
         Behavior::Interval { dur } => periodically(dur, cts_curr),
-        Behavior::perNum { nc } => every_so_much_characters(nc as u64, cts_curr),
+        Behavior::PerQty { nc } => every_n_characters(nc as u64, cts_curr),
         Behavior::Typewriter => each_character(cts_curr),
     };
 }
@@ -414,9 +415,9 @@ fn main() {
                     if n <= 1 {
                         cts.behavior = Behavior::Typewriter;
                     } else if n > 1 && n <= 100 {
-                        cts.behavior = Behavior::perNum { nc: n as u32 };
+                        cts.behavior = Behavior::PerQty { nc: n as u32 };
                     } else {
-                        cts.behavior = Behavior::perNum { nc: 100 };
+                        cts.behavior = Behavior::PerQty { nc: 100 };
                     }
                 }
             }
