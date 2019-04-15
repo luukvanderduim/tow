@@ -21,6 +21,7 @@ use daemonize::Daemonize;
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
 use libc;
+use rand::{thread_rng, Rng};
 use std::f64::consts::E;
 use std::ffi::CString;
 use std::fs::File;
@@ -113,14 +114,12 @@ fn get_sigmoid_shape() -> Vec<f64> {
 
     // FIRST multiply by BIG number ONLY THEN normalize
     //
-    let mut sigm: Vec<f64> = sigma
+    let sigm: Vec<f64> = sigma
         .into_iter()
         .map(|x| x * BIG)
         .map(|x| x / innate_sum)
         .map(|x| x / 2.0)
         .collect();
-
-    let sum: f64 = sigm.iter().sum::<f64>();
 
     // shape yields a _/\_ shaped curve
     // shape contains two sigmoids of which the first is reversed.
@@ -136,29 +135,29 @@ fn get_sigmoid_shape() -> Vec<f64> {
 fn test_get_sigmoid_shape() {
     let n = get_sigmoid_shape().len();
     let mut shape = get_sigmoid_shape();
-    for m in 0..(n / 2) {
+    for _ in 0..(n / 2) {
         assert_eq!(shape.first(), shape.last());
         shape.pop();
         shape.remove(0);
     }
 }
 
-fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begin: Point) {
+fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begin: Point) -> Point {
     let shapevalues: Vec<f64> = get_sigmoid_shape();
     let len = shapevalues.len();
     let threshold = BIG / len as f64;
 
     // xmove in amount of whole pIXels to move
-    let mut xmove_pixels: f64 = 0.0;
-    let mut ymove_pixels: f64 = 0.0;
+    let mut xmove_pixels: f64;
+    let mut ymove_pixels: f64;
 
     // Subpixel amount carry to next iteration
     let mut cx: f64 = 0.0;
     let mut cy: f64 = 0.0;
 
     // Depart from x and y in iteration(n)
-    let mut x: f64 = 0.0;
-    let mut y: f64 = 0.0;
+    let mut x: f64;
+    let mut y: f64;
 
     // To avoid calling xcb with nothing to do,
     // keep track of last call values
@@ -222,10 +221,6 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
         if i == len - 1 {
             y = begin.1 as f64 + (cy / BIG).round() as f64;
             begin.1 = y as i32;
-            println!(
-                "start: ({},{}), dx,dy: ({},{}), last: ({},{})",
-                begin.0, begin.1, deltax, deltay, x, y
-            );
         }
 
         // === Crumb tasting!
@@ -246,6 +241,22 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
             crumb = Some((x, y));
         }
     } // end delimiter of for loop
+    return begin;
+}
+
+#[cfg(test)]
+#[test]
+fn test_do_tow() {
+    let mut rng = thread_rng();
+
+    let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
+    for r in 0..10 {
+        let mut p: Point = Point(rng.gen_range(-1001, 1001), rng.gen_range(-1001, 1001));
+        let q: Point = Point(rng.gen_range(0, 1921), rng.gen_range(0, 1080));
+        let ans = p + q;
+        let r: Point = do_tow(q.0, q.1, &conn, screen_num, p);
+        assert_eq!(r, ans);
+    }
 }
 
 fn warp_abs(x: i32, y: i32, conn: &Connection, screen_num: i32) {

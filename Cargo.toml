@@ -2,7 +2,7 @@
 name = "tow"
 version = "0.0.1"
 edition = "2018"
-keywords = ["xfce4", "xfwm4", "accessibility", "zoom", "ergonomy", "accesibility", "a11y"]
+keywords = ["xfce4", "xfwm4", "accessibility", "a11y", "zoom", "ergonomy", "convenience"]
 authors = ["Luuk van der Duim <luukvanderduim@gmail.com>"]
 
 [dependencies]
@@ -14,3 +14,4 @@ glib = "0.7"
 gtypes = "0.2"
 xcb = "0.8"
 clap = "2.33"
+rand = "0.6"
