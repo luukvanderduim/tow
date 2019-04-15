@@ -3,14 +3,15 @@
 * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #![warn(clippy::all)]
-#![feature(extern_types)]
+//#![feature(extern_types)]
 #![allow(non_camel_case_types)]
 
 /// Tow
-/// an ergonomy utility for desktop zoom users.
-/// tow has the zoom area be towed by the keyboard caret.
-/// It is made with the Xfce4 desktop in mind,
-/// however it might work with other desktop environments aswell.
+///
+/// An convenience helper program for desktop zoom users.
+/// Tow has the zoom area be towed by the keyboard caret.
+/// It is made for the Xfce4 desktop, but not bound to.
+/// It might work with other desktop environments aswell.
 
 #[macro_use]
 extern crate clap;
@@ -27,13 +28,16 @@ use std::ops::{Add, Sub};
 use std::time::{Duration, Instant};
 use xcb;
 use xcb::base::Connection;
+use xcb::ffi::base::XCB_NONE;
 
 mod atspi_ffi;
 use atspi_ffi::*;
 
-static mut SLIDE_DUR: Duration = Duration::from_millis(500);
-const FRAME_DUR: Duration = Duration::from_millis(1000 / 30);
-const XCB_NONE: u32 = 0;
+// static mut SLIDE_DUR: Duration = Duration::from_millis(500);
+const SLIDE_DUR: Duration = Duration::from_millis(800);
+const FRAME_CALC: u64 = (1000.0 / 30.0) as u64;
+const FRAME_DUR: Duration = Duration::from_millis(FRAME_CALC);
+const BIG: f64 = 1000.0;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct Point(i32, i32);
@@ -55,7 +59,8 @@ impl Sub for Point {
 
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
-    counter: u64, // CHANGE INTO WRAPPING TYPE?!
+    counter: u32,
+    mvset: bool,
     timestamp: Option<Instant>,
     pointer_caret_offset: (i32, i32), // an offset is semantically not a point
     pointer_at_begin: Option<Point>,
@@ -65,24 +70,18 @@ struct CaretTowState {
 impl CaretTowState {
     fn reset(&mut self) {
         self.counter = 0;
+        self.mvset = false;
         self.timestamp = Some(Instant::now());
         self.pointer_at_begin = None;
         self.glyph_coords_begin = None;
     }
-    fn advance(&mut self, l: Point) {
-        self.counter += 1;
-        self.glyph_coords_begin = Some(l);
-    }
-    fn pointer_offset(&mut self) {
+
+    fn pointer_caret_offset(&mut self) {
         self.pointer_caret_offset = (
-            self.glyph_coords_begin
-                .expect("no glyph begin coords found")
-                .0
-                - self.pointer_at_begin.expect("no pointer coords found").0,
-            self.glyph_coords_begin
-                .expect("no glyph begin coords found")
-                .1
-                - self.pointer_at_begin.expect("no pointer coords found").1,
+            self.pointer_at_begin.unwrap().0
+                - self.glyph_coords_begin.expect("no glyph coords found").0,
+            self.pointer_at_begin.expect("no glyph begin").1
+                - self.glyph_coords_begin.expect("no glyph coords found").1,
         );
     }
 }
@@ -95,107 +94,172 @@ enum Behavior {
 }
 
 //  .map(|x| (E.powf(x) - E.powf(-x)) / (E.powf(x) + E.powf(-x))) // tanh
-// get_sigmoid makes us a S-shaped graph data
-// a fluent slope within certain bounds
-fn get_sigmoid() -> Vec<f64> {
+
+fn get_sigmoid_shape() -> Vec<f64> {
+    // Slide in ms / Frame in ms = frames / slide
     let frames_per_slide = unsafe {
         ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
             / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64)) as f64
     };
-    let dx: f64 = 1.0 / (frames_per_slide * 0.5);
-    let sigmoid: Vec<f64> = (0..1000)
-        .step_by((dx * f64::from(1000)) as usize)
+
+    let dx: f64 = 1.0 / (frames_per_slide / 2.0);
+    let sigma: Vec<f64> = (0..1000)
+        .step_by((f64::from(dx * 1000.0)) as usize)
         .map(|x| f64::from(x) / f64::from(1000))
-        .map(|x| f64::from(1) / f64::from(1.0_f64 + E.powf(12.0_f64 * x - 6.0_f64)))
+        .map(|x| f64::from(1.0) / f64::from(1.0 + E.powf(12.0 * x - 6.0)))
         .collect();
 
-    sigmoid
+    let innate_sum = sigma.iter().sum::<f64>();
+
+    // FIRST multiply by BIG number ONLY THEN normalize
+    //
+    let mut sigm: Vec<f64> = sigma
+        .into_iter()
+        .map(|x| x * BIG)
+        .map(|x| x / innate_sum)
+        .map(|x| x / 2.0)
+        .collect();
+
+    let sum: f64 = sigm.iter().sum::<f64>();
+
+    // shape yields a _/\_ shaped curve
+    // shape contains two sigmoids of which the first is reversed.
+
+    let mut shape: Vec<f64> = sigm.clone().into_iter().rev().collect(); //clone needed!
+    shape.append(&mut sigm.clone());
+
+    shape
 }
 
-//
-// get_move_shape yields a _/\_ shaped curve
-// It consists of two sigmoids of which one is reversed.
-fn get_move_shape() -> Vec<f64> {
-    let mut right_half = get_sigmoid();
-    let mut cl = right_half.clone();
-    let mut left_half: Vec<f64> = Vec::new();
-
-    while !cl.is_empty() {
-        if let Some(element) = cl.pop() {
-            left_half.push(element);
-        }
-    }
-    left_half.append(&mut right_half);
-    left_half
-}
 #[cfg(test)]
 #[test]
-fn test_get_move_shape() {
-    assert_eq!(get_move_shape().len(), 2 * get_sigmoid().len());
-    assert_eq!(get_move_shape().first(), get_move_shape().last());
+fn test_get_sigmoid_shape() {
+    let n = get_sigmoid_shape().len();
+    let mut shape = get_sigmoid_shape();
+    for m in 0..(n / 2) {
+        assert_eq!(shape.first(), shape.last());
+        shape.pop();
+        shape.remove(0);
+    }
 }
 
-fn do_tow(dx: i32, dy: i32, conn: &Connection, screen_num: i32, begin: Point) {
-    let mut values = get_move_shape();
-    let nframes = values.len();
+fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begin: Point) {
+    let shapevalues: Vec<f64> = get_sigmoid_shape();
+    let len = shapevalues.len();
+    let threshold = BIG / len as f64;
+
+    // xmove in amount of whole pIXels to move
+    let mut xmove_pixels: f64 = 0.0;
+    let mut ymove_pixels: f64 = 0.0;
+
+    // Subpixel amount carry to next iteration
     let mut cx: f64 = 0.0;
-    let mut xmove_amount: f64 = 0.0;
-    let mut ymove_amount: f64 = 0.0;
-    let y_in_x: f64 = dy as f64 / dx as f64;
-    let mut x = begin.0;
-    let mut y = begin.1;
+    let mut cy: f64 = 0.0;
 
-    while !values.is_empty() {
-        if let Some(value) = values.pop() {
-            xmove_amount = (value * dx as f64 + cx as f64) / (nframes as f64 / 2.0) as f64;
+    // Depart from x and y in iteration(n)
+    let mut x: f64 = 0.0;
+    let mut y: f64 = 0.0;
+
+    // To avoid calling xcb with nothing to do,
+    // keep track of last call values
+    let mut crumb: Option<(f64, f64)> = None;
+
+    for (i, v) in shapevalues.into_iter().enumerate() {
+        // During this frame, the amount of pixels to move is:
+        xmove_pixels = v * deltax as f64;
+        ymove_pixels = v * deltay as f64;
+
+        //
+        //  X:
+        //
+
+        if xmove_pixels.abs() >= threshold {
+            //  x moves this frame by:
+            x = begin.0 as f64 + ((xmove_pixels + cx) / BIG) as f64;
+
+            //  The fraction is carried to the next iteration
+            cx = x.fract() * BIG;
+
+            //  Next iterations x starting point
+            begin.0 = x.trunc() as i32;
         } else {
-            panic!("First value in values appears to not be Some().");
+            //  Smaller than the threshold, carry all
+            cx += xmove_pixels;
+
+            //  Nevertheless set y for the move
+            x = begin.0 as f64;
         }
 
-        if xmove_amount.abs() < 1.0 {
-            cx = xmove_amount;
-            continue; // next iteration of while
-        } else if xmove_amount.abs() >= 1.0 {
-            ymove_amount = xmove_amount * y_in_x;
-            warp_abs(
-                x + xmove_amount.trunc() as i32,
-                y + ymove_amount.trunc() as i32,
-                conn,
-                screen_num,
+        // Bonus squeeze
+        // last iteration left us with a remainder, we need to process this
+        if i == len - 1 {
+            x = begin.0 as f64 + (cx / BIG).round() as f64;
+            begin.0 = x as i32;
+        }
+
+        //
+        //  Y:
+        //
+
+        if ymove_pixels.abs() >= threshold {
+            //  y moves this frame by:
+            y = begin.1 as f64 + ((ymove_pixels + cy) / BIG) as f64;
+            //  The fraction is carried to the next iteration
+            cy = y.fract() * BIG;
+
+            //  Next iterations x starting point
+            begin.1 = y.trunc() as i32;
+        } else {
+            //  Smaller than the threshold, carry all
+            cy += ymove_pixels;
+
+            //  Nevertheless set y for the move
+            y = begin.1 as f64;
+        }
+
+        // === Bonus squeeze
+        // last iteration left us with a remainder, we need to process this
+        if i == len - 1 {
+            y = begin.1 as f64 + (cy / BIG).round() as f64;
+            begin.1 = y as i32;
+            println!(
+                "start: ({},{}), dx,dy: ({},{}), last: ({},{})",
+                begin.0, begin.1, deltax, deltay, x, y
             );
-            x += xmove_amount.trunc() as i32;
-            y += ymove_amount.trunc() as i32;
-            cx = xmove_amount.fract();
-            std::thread::sleep(FRAME_DUR);
-        } else {
-            panic!("Wonderous machine! xmove_amount abnormal.");
         }
-    }
+
+        // === Crumb tasting!
+        // Did last iteration leave a crumb?
+        // Taste it to evaluate if we are about to do the same
+        // To avoid calling xcb without a cause!
+        if let Some(cr) = crumb {
+            if cr == (x, y) {
+                std::thread::sleep(FRAME_DUR);
+            } else {
+                warp_abs(x as i32, y as i32, conn, screen_num);
+                std::thread::sleep(FRAME_DUR);
+                crumb = Some((x, y));
+            }
+        } else {
+            warp_abs(x as i32, y as i32, conn, screen_num);
+            std::thread::sleep(FRAME_DUR);
+            crumb = Some((x, y));
+        }
+    } // end delimiter of for loop
 }
 
 fn warp_abs(x: i32, y: i32, conn: &Connection, screen_num: i32) {
     let setup = conn.get_setup();
-    let screen = setup
-        .roots()
-        .nth(screen_num as usize)
-        .expect("Can't get screen.");
+    let screen = setup.roots().nth(screen_num as usize).expect("screen err");
     let root_id = screen.root();
     xcb::warp_pointer(
         conn, XCB_NONE, root_id, 0 as i16, 0 as i16, 0 as u16, 0 as u16, x as i16, y as i16,
     )
     .request_check()
-    .expect("Warp pointer check failed?");
+    .expect("Warp pointer failed?"); // Can we do unchecked?
 }
 
-fn warp_rel(x: i32, y: i32, conn: &Connection) {
-    xcb::warp_pointer(
-        conn, XCB_NONE, XCB_NONE, 0 as i16, 0 as i16, 0 as u16, 0 as u16, x as i16, y as i16,
-    )
-    .request_check()
-    .expect("Check in warp-rel failed!");
-}
-
-fn get_pointer_coordinates(conn: &Connection, screen_num: i32) -> Point {
+fn get_pointer_coords_now(conn: &Connection, screen_num: i32) -> Point {
     let setup = conn.get_setup();
     let screen = setup
         .roots()
@@ -227,15 +291,17 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
 
     let pdata = voidptr_data as *mut (CaretTowState, xcb::base::Connection, i32);
 
-    let text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
-    let caret_offset = unsafe { atspi_text_get_caret_offset(text_iface, null_mut()) };
+    let atspi_text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
+    let atspi_caret_offset = unsafe { atspi_text_get_caret_offset(atspi_text_iface, null_mut()) };
 
-    // Because we cannot ask for the coordinates of the caret directly,
-    // we ask for the bounding box of the glyph at the caret offset.
+    // === Surrogate caret position:
+    // Caret coordinates are not available, however
+    // the bounding box of the glyph at the caret offset is available.
+    //
     let glyph_extents = unsafe {
         atspi_text_get_character_extents(
-            text_iface,
-            caret_offset,
+            atspi_text_iface,
+            atspi_caret_offset,
             ATSPI_COORD_TYPE_SCREEN,
             null_mut(), // GError
         )
@@ -246,103 +312,100 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         return;
     }
 
-    // Rust will assure we'll never consume the lent cake, however we are allowed to destructure it!
+    // Rust assures we'll never consume the lent cake, however we are allowed to destructure it!
+    let (state, conn, screen_num) = unsafe { pdata.as_mut().expect("NULL pointer passed!") };
+    let pointer_coords_now: Point = get_pointer_coords_now(conn, *screen_num);
 
-    let (cts_curr, conn, screen_num) = unsafe { pdata.as_mut().expect("NULL pointer passed!") };
+    let periodically = |dur, state: &mut CaretTowState| {
+        if !state.mvset {
+            state.mvset = true;
+            state.glyph_coords_begin = Some(caret_coords_now);
+            state.pointer_at_begin = Some(pointer_coords_now);
+            state.timestamp = Some(Instant::now());
+        }
 
-    if !cts_curr.glyph_coords_begin.is_some() {
-        cts_curr.glyph_coords_begin = Some(caret_coords_now)
-    }
-
-    let pointer_coordinates: Point = get_pointer_coordinates(conn, *screen_num);
-
-    let periodically = |dur, cts_curr: &mut CaretTowState| {
-        if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
-            cts_curr.reset();
-            cts_curr.pointer_at_begin = Some(pointer_coordinates);
-            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+        if state.pointer_at_begin.unwrap() != pointer_coords_now {
+            state.mvset = false;
+            state.reset();
             return;
         }
 
-        match cts_curr.timestamp {
-            Some(timestamp) if timestamp.elapsed() < dur => {
-                return;
-            }
-            Some(timestamp) if timestamp.elapsed() >= dur => {
-                do_tow(
-                    caret_coords_now.0
-                        - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").0,
-                    caret_coords_now.1
-                        - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").1,
-                    conn,
-                    *screen_num,
-                    cts_curr.glyph_coords_begin.expect("cts: no glyph begin"),
-                );
-                cts_curr.reset();
-                cts_curr.pointer_at_begin = Some(pointer_coordinates);
-                cts_curr.glyph_coords_begin = Some(caret_coords_now);
-                return;
-            }
-            None => {
-                cts_curr.reset();
-                cts_curr.pointer_at_begin = Some(pointer_coordinates);
-                cts_curr.glyph_coords_begin = Some(caret_coords_now);
-                return;
-            }
-            Some(_) => {
-                panic!("Wonderous machine: unreachable state timestamp value");
-            }
-        };
+        if state.timestamp.unwrap().elapsed() >= dur {
+            do_tow(
+                caret_coords_now.0 - state.glyph_coords_begin.unwrap().0,
+                caret_coords_now.1 - state.glyph_coords_begin.unwrap().1,
+                conn,
+                *screen_num,
+                pointer_coords_now,
+            );
+
+            state.reset();
+            return;
+        }
     };
 
     // 'Move per X events is fine, until:
     // - somewhere between 0..X the pointer is moved
     // and with it the view port.
 
-    let every_n_characters = |nc, cts_curr: &mut CaretTowState| {
-        if cts_curr.pointer_at_begin.expect("cts: no pointer begin") != pointer_coordinates {
-            // We dared to move the pointer tssk
-            cts_curr.reset();
-            cts_curr.pointer_at_begin = Some(pointer_coordinates);
-            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+    let glyphcnt = |nc, state: &mut CaretTowState| {
+        if state.mvset == false {
+            state.mvset = true;
+            state.glyph_coords_begin = Some(caret_coords_now);
+            state.pointer_at_begin = Some(pointer_coords_now);
+            state.counter == 0;
+        }
+
+        // We dared to move the pointer. Tsssk
+        if state.pointer_at_begin.expect("state: no begin") != pointer_coords_now {
+            state.mvset = false;
+            state.reset();
             return;
         }
 
-        if cts_curr.counter == 0 {
-            cts_curr.counter = 1;
-            cts_curr.pointer_at_begin = Some(pointer_coordinates);
-            cts_curr.glyph_coords_begin = Some(caret_coords_now);
-            cts_curr.pointer_offset();
+        if state.counter == 0 {
+            state.counter = 1;
+            state.pointer_caret_offset();
             return;
-        } else if cts_curr.counter > 0 && cts_curr.counter < nc {
-            cts_curr.advance(caret_coords_now);
+        } else if state.counter > 0 && state.counter < nc {
+            state.counter += 1;
             return;
-        } else {
+        } else if state.counter >= nc {
             do_tow(
-                caret_coords_now.0 - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").0,
-                caret_coords_now.1 - cts_curr.glyph_coords_begin.expect("cts: no glyph begin").1,
+                caret_coords_now.0 - state.glyph_coords_begin.unwrap().0,
+                caret_coords_now.1 - state.glyph_coords_begin.unwrap().1,
                 conn,
                 *screen_num,
-                cts_curr.glyph_coords_begin.expect("cts: no glyph begin"),
+                Point(
+                    state.glyph_coords_begin.unwrap().0 + state.pointer_caret_offset.0,
+                    state.glyph_coords_begin.unwrap().1 + state.pointer_caret_offset.1,
+                ),
             );
-            cts_curr.reset();
-            cts_curr.pointer_at_begin = Some(pointer_coordinates);
-            cts_curr.glyph_coords_begin = Some(caret_coords_now);
+            state.reset();
             return;
         }
     };
 
-    let each_character = |cts_curr: &mut CaretTowState| {
-        let x = caret_coords_now.0 - 12;
-        let y = caret_coords_now.1 - 15;
+    let each_character = |state: &mut CaretTowState| {
+        if state.mvset == false {
+            state.pointer_at_begin = Some(pointer_coords_now);
+            state.glyph_coords_begin = Some(caret_coords_now);
+            state.pointer_caret_offset();
+            state.mvset = true;
+            return;
+        }
+        // === FIXME need to see wether user moved pointer.
+        // Then adjust for that case, probably mvset = false is enough
+
+        let x = caret_coords_now.0 + state.pointer_caret_offset.0;
+        let y = caret_coords_now.1 + state.pointer_caret_offset.1;
         warp_abs(x, y, conn, *screen_num);
-        return;
     };
 
-    match cts_curr.behavior {
-        Behavior::Interval { dur } => periodically(dur, cts_curr),
-        Behavior::PerQty { nc } => every_n_characters(nc as u64, cts_curr),
-        Behavior::Typewriter => each_character(cts_curr),
+    match state.behavior {
+        Behavior::Interval { dur } => periodically(dur, state),
+        Behavior::PerQty { nc } => glyphcnt(nc as u32, state),
+        Behavior::Typewriter => each_character(state),
     };
 }
 
@@ -365,10 +428,11 @@ fn spookify_tow() {
 }
 
 fn main() {
-    // Passed around state
+    // tossed around state
     let mut cts: CaretTowState = CaretTowState {
         counter: 0,
-        timestamp: Some(std::time::Instant::now()),
+        mvset: false,
+        timestamp: None,
         pointer_caret_offset: (0, 0),
         pointer_at_begin: None,
         glyph_coords_begin: None,
@@ -385,18 +449,9 @@ fn main() {
                 .takes_value(false)
                 .help("Have tow be 'daemonized' / run in the background."),
         )
-        .arg(
-            Arg::with_name("slidedur")
-                .short("s")
-                .long("slide_duration")
-                .takes_value(true)
-                .default_value("500")
-                .help("Duration of view port slide in ms [100-10000] only applies to charcnt and interval modes, otherwise ignored"),
-        )
         .arg(Arg::with_name("behavior")
             .short("b")
             .long("behavior")
-            //.default_value("typewriter")
             .takes_value(true)
             .help("Mode: charcnt [N:2-100] (# chars), interval [N: 100-10000] (ms) or typewriter (default)")
             .max_values(2))
@@ -417,7 +472,7 @@ fn main() {
                     } else if n > 1 && n <= 100 {
                         cts.behavior = Behavior::PerQty { nc: n as u32 };
                     } else {
-                        cts.behavior = Behavior::PerQty { nc: 100 };
+                        cts.behavior = Behavior::PerQty { nc: 100 as u32 };
                     }
                 }
             }
@@ -450,17 +505,10 @@ fn main() {
                 eprintln!("Error: Invalid behavior value.");
             }
         }
-
-        if let Some(s) = matches.value_of("slidedur") {
-            let val: u64 = s.parse::<u64>().expect("Not a valid duration (see -h).");
-            if val <= 10000 && val >= 100 {
-                unsafe { SLIDE_DUR = Duration::from_millis(val) };
-            }
-        }
     }
 
     let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
-    cts.pointer_at_begin = Some(get_pointer_coordinates(&conn, screen_num));
+    cts.pointer_at_begin = Some(get_pointer_coords_now(&conn, screen_num));
 
     let mut triplet = (cts, conn, screen_num);
 
