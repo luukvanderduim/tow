@@ -115,6 +115,13 @@ extern "C" {
     //------- atspi_accessible
     pub fn atspi_accessible_get_text_iface(obj: *mut AtspiAccessible) -> *mut AtspiText;
 
+    pub fn atspi_accessible_get_id(obj: *mut AtspiAccessible, error: *mut *mut GError) -> gint;
+
+    pub fn atspi_accessible_get_application(
+        obj: *mut AtspiAccessible,
+        error: *mut *mut GError,
+    ) -> *mut AtspiAccessible;
+
     //------- atsi_event
 
     pub fn atspi_event_listener_new(

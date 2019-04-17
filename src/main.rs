@@ -17,6 +17,7 @@
 extern crate clap;
 
 use clap::{App, AppSettings, Arg};
+use crossbeam_utils::thread as cb_thread;
 use daemonize::Daemonize;
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
@@ -35,7 +36,7 @@ mod atspi_ffi;
 use atspi_ffi::*;
 
 // static mut SLIDE_DUR: Duration = Duration::from_millis(500);
-const SLIDE_DUR: Duration = Duration::from_millis(800);
+const SLIDE_DUR: Duration = Duration::from_millis(500);
 const FRAME_CALC: u64 = (1000.0 / 30.0) as u64;
 const FRAME_DUR: Duration = Duration::from_millis(FRAME_CALC);
 const BIG: f64 = 1000.0;
@@ -60,6 +61,7 @@ impl Sub for Point {
 
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
+    accessible_id: Option<i32>,
     counter: u32,
     mvset: bool,
     timestamp: Option<Instant>,
@@ -70,6 +72,7 @@ struct CaretTowState {
 }
 impl CaretTowState {
     fn reset(&mut self) {
+        self.accessible_id = None;
         self.counter = 0;
         self.mvset = false;
         self.timestamp = Some(Instant::now());
@@ -160,7 +163,7 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
     let mut y: f64;
 
     // To avoid calling xcb with nothing to do,
-    // keep track of last call values
+    // Leave a crumb with the last call values
     let mut crumb: Option<(f64, f64)> = None;
 
     for (i, v) in shapevalues.into_iter().enumerate() {
@@ -295,7 +298,17 @@ extern "C" fn destroy_evgarbage(data: gpointer) {
 }
 
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
+    use std::ptr;
     use std::ptr::null_mut;
+
+    // Lent from print_focussed_selected.c example
+    if unsafe { (*event).source.is_null() } {
+        return;
+    }
+    /*
+    if unsafe { atspi_accessible_get_application((*event).source, null_mut()).is_null() } {
+        return;
+    } */
 
     // The pointer was a borrow &mut, when the listener took it.
     // We cannot eat a lent cake, so we cannot dereference the pointer.
@@ -304,6 +317,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
 
     let atspi_text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
     let atspi_caret_offset = unsafe { atspi_text_get_caret_offset(atspi_text_iface, null_mut()) };
+    let atspi_id: i32 = unsafe { atspi_accessible_get_id((*event).source, null_mut()) } as i32;
 
     // === Surrogate caret position:
     // Caret coordinates are not available, however
@@ -328,18 +342,34 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     let pointer_coords_now: Point = get_pointer_coords_now(conn, *screen_num);
 
     let periodically = |dur, state: &mut CaretTowState| {
-        if !state.mvset {
+        if state.mvset == false {
             state.mvset = true;
+            state.accessible_id = Some(atspi_id);
             state.glyph_coords_begin = Some(caret_coords_now);
             state.pointer_at_begin = Some(pointer_coords_now);
             state.timestamp = Some(Instant::now());
         }
 
-        if state.pointer_at_begin.unwrap() != pointer_coords_now {
+        // During acquisition of caret events,
+        // the origin of the events needs to be the same
+        // Otherwise we see unwanted slides.
+
+        if state.accessible_id.unwrap() != atspi_id {
             state.mvset = false;
             state.reset();
             return;
         }
+
+        // Tow needs to learn to discern synthetic moves device moves.
+        // Hopefully through xcb events.
+        // until then the cure is worse than the disease
+        // thus disable the check below
+        //
+        /*         if state.pointer_at_begin.unwrap() != pointer_coords_now {
+            state.mvset = false;
+            state.reset();
+            return;
+        } */
 
         if state.timestamp.unwrap().elapsed() >= dur {
             do_tow(
@@ -362,17 +392,31 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     let glyphcnt = |nc, state: &mut CaretTowState| {
         if state.mvset == false {
             state.mvset = true;
+            state.accessible_id = Some(atspi_id);
             state.glyph_coords_begin = Some(caret_coords_now);
             state.pointer_at_begin = Some(pointer_coords_now);
             state.counter == 0;
         }
 
-        // We dared to move the pointer. Tsssk
-        if state.pointer_at_begin.expect("state: no begin") != pointer_coords_now {
+        // During acquisition of caret events,
+        // the origin of the events needs to be the same
+        // Otherwise we see unwanted slides.
+
+        if state.accessible_id.unwrap() != atspi_id {
             state.mvset = false;
             state.reset();
             return;
         }
+        // Tow needs to learn to discern synthetic moves device moves.
+        // Hopefully through xcb events.
+        // until then the cure is worse than the disease
+        // thus disable the check below
+        //
+        /*         if state.pointer_at_begin.expect("state: no begin") != pointer_coords_now {
+            state.mvset = false;
+            state.reset();
+            return;
+        } */
 
         if state.counter == 0 {
             state.counter = 1;
@@ -441,6 +485,7 @@ fn spookify_tow() {
 fn main() {
     // tossed around state
     let mut cts: CaretTowState = CaretTowState {
+        accessible_id: None,
         counter: 0,
         mvset: false,
         timestamp: None,

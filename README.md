@@ -15,6 +15,7 @@ Tow seeks to scratch an itch some users who depend on the zoom
 feature may have while working with zoom.
 
 ## Problem
+
  The user directs the zoomed view port position with the pointer device.
  (eg. the mouse, or any other pointer device.)
 
@@ -30,10 +31,11 @@ feature may have while working with zoom.
  for those people I wrote tow.
 
 ## The solution
+
  Tow aims to automate the readjusting by having the zoom view port
  be 'towed' by the caret.
 
-## Usage:
+## Usage
 
     tow [FLAGS] [OPTIONS]
 
@@ -43,14 +45,14 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-    -b, --behavior <behavior>          Mode: charcnt [N:2-100] (# chars), interval [N: 100-10000] (ms) or typewriter
-                                       (default)
-    -s, --slide_duration <slidedur>    Duration of view port slide in ms [100-10000] only applies to charcnt and
+    -b, --behavior [ mode ] [ val ]    Mode: 'charcnt' [N:2-100] (# chars), 'interval' [N: 100-10000] (ms) or 'typewriter' [ - ] (default)
+
+    -s, --slide_duration [dur. in ms]  Duration of view port slide in ms [100-10000] only applies to charcnt and
                                        interval modes, otherwise ignored [default: 500]
 
+## TO DO
 
-## TO DO:
-- It works but it has (many) flaws.
+- Tow 'works' but it has (many) flaws.
 
     Tow is not stable, let alone ready for a release.
 
@@ -60,7 +62,7 @@ OPTIONS:
     I am pretty sure that in its current state tow is leaking memory.
     Memory management is currently poorly understood by its author.
 
-    it also needs a runtime on/off hotkey.
+    Tow also needs a runtime on/off hotkey.
 Some programs do not implement accessibility as intended, this may lead to unwanted behavior.
 Therefore we need and option to opt-out during runtime.
 
@@ -68,12 +70,18 @@ Therefore we need and option to opt-out during runtime.
 
     Even though we have greatly improved event handling speed, events can still be missed (at-spi2 may decide to drop events) and we may have 'false positive' caret-moved events - these may cause unwanted behavior.
 
-    The 'interval' mode may get its own worker thread to do interval accounting and moving.
-    Currently [2019-04-08] we move at the event that came later than the duration of the set interval.
+    Tow may get its own worker thread to do the moving while the main thread does the acquisition and accounting.
+    Currently [2019-04-08] we move at the first event that comes after the the set interval duration.
     The current implementation makes the interval duration less meaningful.
 
     Detect and 'play nice' with policy kit.
     Which may be as simple as prefixing with pk-exec?
+
+### Caveats / bugs
+
+    [2019-04-16] Until we have a worker thread, slide times must be smaller than move (acquisition) times.
+
+    [2019-04-16] Until tow can discern synthetic from device (mouse / pad / other) moves, inbetween moves lead to unwanted moves.
 
 ## Installation
 
@@ -81,25 +89,38 @@ prerequisites include
 . Rust development toolchain.
 . at-spi2-core
 
- $ git clone https://github.com/luukvanderduim/tow.git
+ $ git clone <https://github.com/luukvanderduim/tow.git>
+
  $ cd tow
+
  $ cargo build --release
+
  $ cargo run --release
  or
+
  $ cargo install --path .  (add --force on subsequent invocation)
+
  $ tow
 
 ## Contributions
 
  Yes, please!
 
- If you can fix problems with tow, or
- fix problems with other programs that do not implement Atk correctly.
+ If you can fix problems with tow - or - take accerciser to check your (app of interest)
+ for Atk implementation shortcomings. Lets improve our ecosystem!
 
  I would really love to see VSCode emit caret-moved events.
- I had expected Thunderbird to do better.
+
+ I would like to know how to pursuade Thunderbird to emit caret-moved events. Anyone?
 
  Thank you so much in advance.
+
+## Contact
+
+Don't hesitate to drop a line at:
+Especially if you use tow and like to share your experiences.
+
+luukvanderduim (-AT-) gmail (-dot-) com
 
 ## Licence
 
