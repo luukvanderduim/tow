@@ -3,7 +3,7 @@
 * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #![warn(clippy::all)]
-//#![feature(extern_types)]
+#![feature(extern_types)]
 #![allow(non_camel_case_types)]
 
 /// Tow
@@ -305,10 +305,22 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     if unsafe { (*event).source.is_null() } {
         return;
     }
-    /*
-    if unsafe { atspi_accessible_get_application((*event).source, null_mut()).is_null() } {
+    // Want to look in here later - Accident prevention
+    if unsafe { (*(*event).source).states.is_null() } {
         return;
-    } */
+    }
+
+    // Only the caret-moved events from NON-read-only text accessible objects are relevant to tow.
+    // It seems 'EDITABLE' rules out terminals?
+    if unsafe {
+        atspi_state_set_contains(
+            (*(*event).source).states,
+            // AtspiStateType_ATSPI_STATE_EDITABLE,
+            AtspiStateType_ATSPI_STATE_READ_ONLY,
+        ) == gtypes::primitive::TRUE
+    } {
+        return;
+    }
 
     // The pointer was a borrow &mut, when the listener took it.
     // We cannot eat a lent cake, so we cannot dereference the pointer.
@@ -395,7 +407,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
             state.accessible_id = Some(atspi_id);
             state.glyph_coords_begin = Some(caret_coords_now);
             state.pointer_at_begin = Some(pointer_coords_now);
-            state.counter == 0;
+            state.counter = 0;
         }
 
         // During acquisition of caret events,

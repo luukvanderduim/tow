@@ -1,5 +1,8 @@
+#![allow(non_camel_case_types)]
+#![allow(non_upper_case_globals)]
+
 use glib::object::GObject;
-use glib_sys::{GDestroyNotify, GError};
+use glib_sys::{GArray, GDestroyNotify, GError};
 use glib_sys::{GHashTable, GPtrArray};
 use gobject_sys::{GTypeInterface, GValue};
 use gtypes::primitive::{gboolean, gchar, gint, guint};
@@ -9,7 +12,8 @@ use gtypes::primitive::{gboolean, gchar, gint, guint};
 
 // == types:
 
-type AtspiObject = _AtspiObject;
+pub type AtspiObject = _AtspiObject;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 struct _AtspiObject {
@@ -18,23 +22,32 @@ struct _AtspiObject {
     path: *mut ::std::os::raw::c_char,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiAccessiblePrivate {
+    _unused: [u8; 0],
+}
+
+pub type AtspiAccessiblePrivate = _AtspiAccessiblePrivate;
+
 pub type AtspiAccessible = _AtspiAccessible;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _AtspiAccessible {
-    parent: AtspiObject,
-    accessible_parent: *mut AtspiAccessible,
-    children: *mut GPtrArray,
-    role: AtspiRole,
-    interfaces: gint,
+    pub parent: AtspiObject,
+    pub accessible_parent: *mut AtspiAccessible,
+    pub children: *mut GPtrArray,
+    pub role: AtspiRole,
+    pub interfaces: gint,
     pub name: *mut ::std::os::raw::c_char,
-    description: *mut ::std::os::raw::c_char,
-    states: *const ::std::os::raw::c_void, //AtspiStateSet
-    attributes: *mut GHashTable,
-    cached_properties: guint,
-    priv_: *const ::std::os::raw::c_void, // AtspiAccessiblePrivate
+    pub description: *mut ::std::os::raw::c_char,
+    pub states: *mut AtspiStateSet,
+    pub attributes: *mut GHashTable,
+    pub cached_properties: guint,
+    pub priv_: *mut AtspiAccessiblePrivate,
 }
+
 pub type AtspiEventListenerCB = ::std::option::Option<
     unsafe extern "C" fn(event: *mut AtspiEvent, user_data: *mut ::std::os::raw::c_void),
 >;
@@ -92,12 +105,85 @@ type guint32 = ::std::os::raw::c_uint;
 type GQuark = guint32;
 type gpointer = *mut ::std::os::raw::c_void;
 
+pub type AtspiEditableText = _AtspiEditableText;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiEditableText {
+    pub parent: GTypeInterface,
+}
+
+pub type AtspiStateSet = _AtspiStateSet;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct _AtspiStateSet {
+    pub parent: GObject,
+    pub accessible: *mut _AtspiAccessible,
+    pub states: gint64,
+}
+
+pub type gint64 = ::std::os::raw::c_long;
+
+pub type AtspiStateType = u32;
+
+pub type AtspiTextClipType = u32;
+pub const AtspiStateType_ATSPI_STATE_INVALID: AtspiStateType = 0;
+pub const AtspiStateType_ATSPI_STATE_ACTIVE: AtspiStateType = 1;
+pub const AtspiStateType_ATSPI_STATE_ARMED: AtspiStateType = 2;
+pub const AtspiStateType_ATSPI_STATE_BUSY: AtspiStateType = 3;
+pub const AtspiStateType_ATSPI_STATE_CHECKED: AtspiStateType = 4;
+pub const AtspiStateType_ATSPI_STATE_COLLAPSED: AtspiStateType = 5;
+pub const AtspiStateType_ATSPI_STATE_DEFUNCT: AtspiStateType = 6;
+pub const AtspiStateType_ATSPI_STATE_EDITABLE: AtspiStateType = 7;
+pub const AtspiStateType_ATSPI_STATE_ENABLED: AtspiStateType = 8;
+pub const AtspiStateType_ATSPI_STATE_EXPANDABLE: AtspiStateType = 9;
+pub const AtspiStateType_ATSPI_STATE_EXPANDED: AtspiStateType = 10;
+pub const AtspiStateType_ATSPI_STATE_FOCUSABLE: AtspiStateType = 11;
+pub const AtspiStateType_ATSPI_STATE_FOCUSED: AtspiStateType = 12;
+pub const AtspiStateType_ATSPI_STATE_HAS_TOOLTIP: AtspiStateType = 13;
+pub const AtspiStateType_ATSPI_STATE_HORIZONTAL: AtspiStateType = 14;
+pub const AtspiStateType_ATSPI_STATE_ICONIFIED: AtspiStateType = 15;
+pub const AtspiStateType_ATSPI_STATE_MODAL: AtspiStateType = 16;
+pub const AtspiStateType_ATSPI_STATE_MULTI_LINE: AtspiStateType = 17;
+pub const AtspiStateType_ATSPI_STATE_MULTISELECTABLE: AtspiStateType = 18;
+pub const AtspiStateType_ATSPI_STATE_OPAQUE: AtspiStateType = 19;
+pub const AtspiStateType_ATSPI_STATE_PRESSED: AtspiStateType = 20;
+pub const AtspiStateType_ATSPI_STATE_RESIZABLE: AtspiStateType = 21;
+pub const AtspiStateType_ATSPI_STATE_SELECTABLE: AtspiStateType = 22;
+pub const AtspiStateType_ATSPI_STATE_SELECTED: AtspiStateType = 23;
+pub const AtspiStateType_ATSPI_STATE_SENSITIVE: AtspiStateType = 24;
+pub const AtspiStateType_ATSPI_STATE_SHOWING: AtspiStateType = 25;
+pub const AtspiStateType_ATSPI_STATE_SINGLE_LINE: AtspiStateType = 26;
+pub const AtspiStateType_ATSPI_STATE_STALE: AtspiStateType = 27;
+pub const AtspiStateType_ATSPI_STATE_TRANSIENT: AtspiStateType = 28;
+pub const AtspiStateType_ATSPI_STATE_VERTICAL: AtspiStateType = 29;
+pub const AtspiStateType_ATSPI_STATE_VISIBLE: AtspiStateType = 30;
+pub const AtspiStateType_ATSPI_STATE_MANAGES_DESCENDANTS: AtspiStateType = 31;
+pub const AtspiStateType_ATSPI_STATE_INDETERMINATE: AtspiStateType = 32;
+pub const AtspiStateType_ATSPI_STATE_REQUIRED: AtspiStateType = 33;
+pub const AtspiStateType_ATSPI_STATE_TRUNCATED: AtspiStateType = 34;
+pub const AtspiStateType_ATSPI_STATE_ANIMATED: AtspiStateType = 35;
+pub const AtspiStateType_ATSPI_STATE_INVALID_ENTRY: AtspiStateType = 36;
+pub const AtspiStateType_ATSPI_STATE_SUPPORTS_AUTOCOMPLETION: AtspiStateType = 37;
+pub const AtspiStateType_ATSPI_STATE_SELECTABLE_TEXT: AtspiStateType = 38;
+pub const AtspiStateType_ATSPI_STATE_IS_DEFAULT: AtspiStateType = 39;
+pub const AtspiStateType_ATSPI_STATE_VISITED: AtspiStateType = 40;
+pub const AtspiStateType_ATSPI_STATE_CHECKABLE: AtspiStateType = 41;
+pub const AtspiStateType_ATSPI_STATE_HAS_POPUP: AtspiStateType = 42;
+pub const AtspiStateType_ATSPI_STATE_READ_ONLY: AtspiStateType = 43;
+pub const AtspiStateType_ATSPI_STATE_LAST_DEFINED: AtspiStateType = 44;
+
 //
 // atspi functions
 //
 
 #[link(name = "atspi")]
 extern "C" {
+    //--------- atspi state
+
+    pub fn atspi_state_set_contains(set: *mut AtspiStateSet, state: AtspiStateType) -> gboolean;
+    pub fn atspi_state_set_get_states(set: *mut AtspiStateSet) -> *mut GArray;
+
     //--------- atspi_misc
     pub fn atspi_init() -> ::std::os::raw::c_int;
     pub fn atspi_exit() -> ::std::os::raw::c_int;
@@ -121,6 +207,8 @@ extern "C" {
         obj: *mut AtspiAccessible,
         error: *mut *mut GError,
     ) -> *mut AtspiAccessible;
+
+    pub fn atspi_accessible_get_editable_text(obj: *mut AtspiAccessible) -> *mut AtspiEditableText;
 
     //------- atsi_event
 
