@@ -16,13 +16,13 @@
 #[macro_use]
 extern crate clap;
 
-use clap::{App, AppSettings, Arg};
-use crossbeam_utils::thread as cb_thread;
+use clap::{App, Arg};
+
 use daemonize::Daemonize;
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
 use libc;
-use rand::{thread_rng, Rng};
+
 use std::f64::consts::E;
 use std::ffi::CString;
 use std::fs::File;
@@ -101,10 +101,9 @@ enum Behavior {
 
 fn get_sigmoid_shape() -> Vec<f64> {
     // Slide in ms / Frame in ms = frames / slide
-    let frames_per_slide = unsafe {
-        ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
-            / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64)) as f64
-    };
+    let frames_per_slide = ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
+        / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64))
+        as f64;
 
     let dx: f64 = 1.0 / (frames_per_slide / 2.0);
     let sigma: Vec<f64> = (0..1000)
@@ -250,11 +249,13 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
 #[cfg(test)]
 #[test]
 fn test_do_tow() {
+    use rand::{thread_rng, Rng};
+
     let mut rng = thread_rng();
 
     let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
-    for r in 0..10 {
-        let mut p: Point = Point(rng.gen_range(-1001, 1001), rng.gen_range(-1001, 1001));
+    for _ in 0..10 {
+        let p: Point = Point(rng.gen_range(-1001, 1001), rng.gen_range(-1001, 1001));
         let q: Point = Point(rng.gen_range(0, 1921), rng.gen_range(0, 1080));
         let ans = p + q;
         let r: Point = do_tow(q.0, q.1, &conn, screen_num, p);
@@ -298,7 +299,6 @@ extern "C" fn destroy_evgarbage(data: gpointer) {
 }
 
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
-    use std::ptr;
     use std::ptr::null_mut;
 
     // Lent from print_focussed_selected.c example

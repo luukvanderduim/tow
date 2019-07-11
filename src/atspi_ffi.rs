@@ -1,4 +1,5 @@
 #![allow(non_camel_case_types)]
+#![allow(dead_code)]
 #![allow(non_upper_case_globals)]
 
 use glib::object::GObject;
@@ -16,10 +17,10 @@ pub type AtspiObject = _AtspiObject;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-struct _AtspiObject {
-    parent: GObject,
-    app: *const ::std::os::raw::c_void,
-    path: *mut ::std::os::raw::c_char,
+pub struct _AtspiObject {
+    pub parent: GObject,
+    pub app: *const ::std::os::raw::c_void,
+    pub path: *mut ::std::os::raw::c_char,
 }
 
 #[repr(C)]
@@ -53,7 +54,7 @@ pub type AtspiEventListenerCB = ::std::option::Option<
 >;
 type AtspiRole = u32;
 
-pub type AtspiEventListenerMode = _AtspiEventListenerMode;
+// pub type AtspiEventListenerMode = _AtspiEventListenerMode;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct _AtspiEventListenerMode {
