@@ -101,15 +101,15 @@ enum Behavior {
 
 fn get_sigmoid_shape() -> Vec<f64> {
     // Slide in ms / Frame in ms = frames / slide
-    let frames_per_slide = ((SLIDE_DUR.as_secs() * 1000_u64 + SLIDE_DUR.subsec_millis() as u64)
-        / (FRAME_DUR.as_secs() * 1000_u64 + FRAME_DUR.subsec_millis() as u64))
+    let frames_per_slide = ((SLIDE_DUR.as_secs() * 1000_u64 + u64::from(SLIDE_DUR.subsec_millis()))
+        / (FRAME_DUR.as_secs() * 1000_u64 + u64::from(FRAME_DUR.subsec_millis()) ))
         as f64;
 
     let dx: f64 = 1.0 / (frames_per_slide / 2.0);
     let sigma: Vec<f64> = (0..1000)
-        .step_by((f64::from(dx * 1000.0)) as usize)
-        .map(|x| f64::from(x) / f64::from(1000))
-        .map(|x| f64::from(1.0) / f64::from(1.0 + E.powf(12.0 * x - 6.0)))
+        .step_by((dx * 1000f64) as usize) // Lossy cast
+        .map(|x| f64::from(x) / 1000f64)
+        .map(|x| 1.0f64 / (1.0f64 + E.powf(12.0 * x - 6.0)))
         .collect();
 
     let innate_sum = sigma.iter().sum::<f64>();
@@ -167,8 +167,8 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
 
     for (i, v) in shapevalues.into_iter().enumerate() {
         // During this frame, the amount of pixels to move is:
-        xmove_pixels = v * deltax as f64;
-        ymove_pixels = v * deltay as f64;
+        xmove_pixels = v * f64::from(deltax);
+        ymove_pixels = v * f64::from(deltay);
 
         //
         //  X:
@@ -176,7 +176,7 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
 
         if xmove_pixels.abs() >= threshold {
             //  x moves this frame by:
-            x = begin.0 as f64 + ((xmove_pixels + cx) / BIG) as f64;
+            x = f64::from(begin.0) + (xmove_pixels + cx) / BIG;
 
             //  The fraction is carried to the next iteration
             cx = x.fract() * BIG;
@@ -188,13 +188,13 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
             cx += xmove_pixels;
 
             //  Nevertheless set y for the move
-            x = begin.0 as f64;
+            x = f64::from(begin.0);
         }
 
         // Bonus squeeze
         // last iteration left us with a remainder, we need to process this
         if i == len - 1 {
-            x = begin.0 as f64 + (cx / BIG).round() as f64;
+            x = f64::from(begin.0) + (cx / BIG).round() as f64;
             begin.0 = x as i32;
         }
 
@@ -204,7 +204,7 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
 
         if ymove_pixels.abs() >= threshold {
             //  y moves this frame by:
-            y = begin.1 as f64 + ((ymove_pixels + cy) / BIG) as f64;
+            y = f64::from(begin.1) + ((ymove_pixels + cy) / BIG) as f64;
             //  The fraction is carried to the next iteration
             cy = y.fract() * BIG;
 
@@ -215,13 +215,13 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
             cy += ymove_pixels;
 
             //  Nevertheless set y for the move
-            y = begin.1 as f64;
+            y = f64::from(begin.1);
         }
 
         // === Bonus squeeze
         // last iteration left us with a remainder, we need to process this
         if i == len - 1 {
-            y = begin.1 as f64 + (cy / BIG).round() as f64;
+            y = f64::from(begin.1) + (cy / BIG).round() as f64;
             begin.1 = y as i32;
         }
 
@@ -243,7 +243,7 @@ fn do_tow(deltax: i32, deltay: i32, conn: &Connection, screen_num: i32, mut begi
             crumb = Some((x, y));
         }
     } // end delimiter of for loop
-    return begin;
+    begin
 }
 
 #[cfg(test)]
@@ -286,16 +286,16 @@ fn get_pointer_coords_now(conn: &Connection, screen_num: i32) -> Point {
 
     match pointercookie.get_reply() {
         Ok(r) => {
-            return Point(r.root_x() as i32, r.root_y() as i32);
+          Point(i32::from(r.root_x()), i32::from(r.root_y()))
         }
-        Err(_) => {
-            panic!("could not get coordinates of pointer");
+        Err(e) => {
+            panic!("could not get coordinates of pointer: {}", e);
         }
-    };
+    }
 }
 
 extern "C" fn destroy_evgarbage(data: gpointer) {
-    unsafe { libc::free(data) };
+    unsafe { glib_sys::g_free(data) }; // gpointer cleaned by gfree
 }
 
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
@@ -354,7 +354,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     let pointer_coords_now: Point = get_pointer_coords_now(conn, *screen_num);
 
     let periodically = |dur, state: &mut CaretTowState| {
-        if state.mvset == false {
+        if !state.mvset {
             state.mvset = true;
             state.accessible_id = Some(atspi_id);
             state.glyph_coords_begin = Some(caret_coords_now);
@@ -402,7 +402,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     // and with it the view port.
 
     let glyphcnt = |nc, state: &mut CaretTowState| {
-        if state.mvset == false {
+        if !state.mvset {
             state.mvset = true;
             state.accessible_id = Some(atspi_id);
             state.glyph_coords_begin = Some(caret_coords_now);
@@ -433,10 +433,8 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         if state.counter == 0 {
             state.counter = 1;
             state.pointer_caret_offset();
-            return;
         } else if state.counter > 0 && state.counter < nc {
             state.counter += 1;
-            return;
         } else if state.counter >= nc {
             do_tow(
                 caret_coords_now.0 - state.glyph_coords_begin.unwrap().0,
@@ -454,7 +452,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     };
 
     let each_character = |state: &mut CaretTowState| {
-        if state.mvset == false {
+        if !state.mvset {
             state.pointer_at_begin = Some(pointer_coords_now);
             state.glyph_coords_begin = Some(caret_coords_now);
             state.pointer_caret_offset();
@@ -538,9 +536,9 @@ fn main() {
                     if n <= 1 {
                         cts.behavior = Behavior::Typewriter;
                     } else if n > 1 && n <= 100 {
-                        cts.behavior = Behavior::PerQty { nc: n as u32 };
+                        cts.behavior = Behavior::PerQty { nc: u32::from(n) };
                     } else {
-                        cts.behavior = Behavior::PerQty { nc: 100 as u32 };
+                        cts.behavior = Behavior::PerQty { nc: 100_u32 };
                     }
                 }
             }
@@ -554,7 +552,7 @@ fn main() {
                     }
                     if n >= 100 && n <= 10000 {
                         cts.behavior = Behavior::Interval {
-                            dur: Duration::from_millis(n as u64),
+                            dur: Duration::from_millis(u64::from(n)),
                         };
                     } else {
                         cts.behavior = Behavior::Interval {
@@ -612,7 +610,7 @@ fn main() {
 
     unsafe {
         gobject_sys::g_object_unref(err as *mut gobject_sys::GObject); // as GError
-        gobject_sys::g_object_unref(evtype as *mut gobject_sys::GObject); // as
+        glib_sys::g_free(evtype as gpointer);
         gobject_sys::g_object_unref(listener as *mut gobject_sys::GObject);
         gobject_sys::g_object_unref(voidptr_data as *mut gobject_sys::GObject);
     }
