@@ -62,6 +62,8 @@ impl Sub for Point {
 #[derive(Clone, Copy, Debug)]
 struct CaretTowState {
     accessible_id: Option<i32>,
+    prev_moved_to: Option<Point>,
+    // prev_caret_offset: Option<i32>,
     counter: u32,
     mvset: bool,
     timestamp: Option<Instant>,
@@ -75,6 +77,7 @@ impl CaretTowState {
         self.accessible_id = None;
         self.counter = 0;
         self.mvset = false;
+        self.pointer_caret_offset = (0i32, 0i32);
         self.timestamp = Some(Instant::now());
         self.pointer_at_begin = None;
         self.glyph_coords_begin = None;
@@ -82,9 +85,9 @@ impl CaretTowState {
 
     fn pointer_caret_offset(&mut self) {
         self.pointer_caret_offset = (
-            self.pointer_at_begin.unwrap().0
+            self.pointer_at_begin.expect("no pointer begin").0
                 - self.glyph_coords_begin.expect("no glyph coords found").0,
-            self.pointer_at_begin.expect("no glyph begin").1
+            self.pointer_at_begin.expect("no pointer begin").1
                 - self.glyph_coords_begin.expect("no glyph coords found").1,
         );
     }
@@ -102,7 +105,7 @@ enum Behavior {
 fn get_sigmoid_shape() -> Vec<f64> {
     // Slide in ms / Frame in ms = frames / slide
     let frames_per_slide = ((SLIDE_DUR.as_secs() * 1000_u64 + u64::from(SLIDE_DUR.subsec_millis()))
-        / (FRAME_DUR.as_secs() * 1000_u64 + u64::from(FRAME_DUR.subsec_millis()) ))
+        / (FRAME_DUR.as_secs() * 1000_u64 + u64::from(FRAME_DUR.subsec_millis())))
         as f64;
 
     let dx: f64 = 1.0 / (frames_per_slide / 2.0);
@@ -285,9 +288,7 @@ fn get_pointer_coords_now(conn: &Connection, screen_num: i32) -> Point {
     let pointercookie = xcb::xproto::query_pointer(&conn, root_id);
 
     match pointercookie.get_reply() {
-        Ok(r) => {
-          Point(i32::from(r.root_x()), i32::from(r.root_y()))
-        }
+        Ok(r) => Point(i32::from(r.root_x()), i32::from(r.root_y())),
         Err(e) => {
             panic!("could not get coordinates of pointer: {}", e);
         }
@@ -322,7 +323,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         return;
     }
 
-    // The pointer was a borrow &mut, when the listener took it.
+    // The pointer was a borrowed &mut, when the listener took it.
     // We cannot eat a lent cake, so we cannot dereference the pointer.
 
     let pdata = voidptr_data as *mut (CaretTowState, xcb::base::Connection, i32);
@@ -367,7 +368,6 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         // Otherwise we see unwanted slides.
 
         if state.accessible_id.unwrap() != atspi_id {
-            state.mvset = false;
             state.reset();
             return;
         }
@@ -415,17 +415,16 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         // Otherwise we see unwanted slides.
 
         if state.accessible_id.unwrap() != atspi_id {
-            state.mvset = false;
             state.reset();
+            // return in anticipation of an event that originates from current id
             return;
         }
-        // Tow needs to learn to discern synthetic moves device moves.
-        // Hopefully through xcb events.
+        // Tow needs to learn to discern synthetic moves from device moves.
         // until then the cure is worse than the disease
         // thus disable the check below
         //
-        /*         if state.pointer_at_begin.expect("state: no begin") != pointer_coords_now {
-            state.mvset = false;
+        /*
+        if state.pointer_at_begin.expect("state: no begin") != pointer_coords_now {
             state.reset();
             return;
         } */
@@ -435,18 +434,21 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
             state.pointer_caret_offset();
         } else if state.counter > 0 && state.counter < nc {
             state.counter += 1;
+            state.pointer_caret_offset(); // users can move pointer
         } else if state.counter >= nc {
+            let destination = Point(
+                state.glyph_coords_begin.unwrap().0 + state.pointer_caret_offset.0,
+                state.glyph_coords_begin.unwrap().1 + state.pointer_caret_offset.1,
+            );
             do_tow(
                 caret_coords_now.0 - state.glyph_coords_begin.unwrap().0,
                 caret_coords_now.1 - state.glyph_coords_begin.unwrap().1,
                 conn,
                 *screen_num,
-                Point(
-                    state.glyph_coords_begin.unwrap().0 + state.pointer_caret_offset.0,
-                    state.glyph_coords_begin.unwrap().1 + state.pointer_caret_offset.1,
-                ),
+                destination,
             );
             state.reset();
+            state.prev_moved_to = Some(destination);
             return;
         }
     };
@@ -457,14 +459,25 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
             state.glyph_coords_begin = Some(caret_coords_now);
             state.pointer_caret_offset();
             state.mvset = true;
+
+            let x = caret_coords_now.0 + state.pointer_caret_offset.0;
+            let y = caret_coords_now.1 + state.pointer_caret_offset.1;
+            warp_abs(x, y, conn, *screen_num);
+            state.prev_moved_to = Some(Point(x, y));
+
             return;
         }
-        // === FIXME need to see wether user moved pointer.
-        // Then adjust for that case, probably mvset = false is enough
+
+        if state.prev_moved_to.unwrap() != pointer_coords_now {
+            state.reset();
+            state.prev_moved_to = None;
+            return;
+        }
 
         let x = caret_coords_now.0 + state.pointer_caret_offset.0;
         let y = caret_coords_now.1 + state.pointer_caret_offset.1;
         warp_abs(x, y, conn, *screen_num);
+        state.prev_moved_to = Some(Point(x, y));
     };
 
     match state.behavior {
@@ -496,6 +509,7 @@ fn main() {
     // tossed around state
     let mut cts: CaretTowState = CaretTowState {
         accessible_id: None,
+        prev_moved_to: None,
         counter: 0,
         mvset: false,
         timestamp: None,
