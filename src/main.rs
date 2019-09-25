@@ -605,7 +605,6 @@ fn main() {
         panic!("Could not initialise AT-SPI.");
     }
 
-
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
         .into_raw() as *const i8;
@@ -617,7 +616,6 @@ fn main() {
     }
 
     Event::main();
-
 
     if unsafe { atspi_exit() } != 0 {
         eprintln!("AT-SPI exit failed.");
