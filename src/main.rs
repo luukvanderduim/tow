@@ -32,8 +32,8 @@ use xcb;
 use xcb::base::Connection;
 use xcb::ffi::base::XCB_NONE;
 
-mod atspi_ffi;
-use atspi_ffi::*;
+use atspi::Event;
+use atspi_sys::*;
 
 // static mut SLIDE_DUR: Duration = Duration::from_millis(500);
 const SLIDE_DUR: Duration = Duration::from_millis(500);
@@ -317,7 +317,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         atspi_state_set_contains(
             (*(*event).source).states,
             // AtspiStateType_ATSPI_STATE_EDITABLE,
-            AtspiStateType_ATSPI_STATE_READ_ONLY,
+            ATSPI_STATE_READ_ONLY,
         ) == gtypes::primitive::TRUE
     } {
         return;
@@ -605,6 +605,7 @@ fn main() {
         panic!("Could not initialise AT-SPI.");
     }
 
+
     let evtype = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
         .into_raw() as *const i8;
@@ -614,9 +615,9 @@ fn main() {
     unsafe {
         atspi_event_listener_register(listener, evtype, err);
     }
-    unsafe {
-        atspi_event_main();
-    }
+
+    Event::main();
+
 
     if unsafe { atspi_exit() } != 0 {
         eprintln!("AT-SPI exit failed.");
