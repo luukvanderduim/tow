@@ -4,6 +4,7 @@
 
 #![warn(clippy::all)]
 #![feature(extern_types)]
+#![feature(type_ascription)]
 #![allow(non_camel_case_types)]
 
 /// Tow
@@ -15,10 +16,12 @@
 
 #[macro_use]
 extern crate clap;
-
 use clap::{App, Arg};
 
 use daemonize::Daemonize;
+
+use glib::translate::*;
+
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
 use libc;
@@ -32,7 +35,9 @@ use xcb;
 use xcb::base::Connection;
 use xcb::ffi::base::XCB_NONE;
 
-use atspi::Event;
+use atspi::{
+    Accessible, AccessibleExt, CoordType, Event, Rect, StateSetExt, StateType, Text, TextExt,
+};
 use atspi_sys::*;
 
 // static mut SLIDE_DUR: Duration = Duration::from_millis(500);
@@ -300,26 +305,15 @@ extern "C" fn destroy_evgarbage(data: gpointer) {
 }
 
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
-    use std::ptr::null_mut;
+    // I assume the glib conversion checks for NULL
+    let s_accessible: Accessible = unsafe { from_glib_borrow((*event).source) };
+    let s_stateset = s_accessible
+        .get_state_set()
+        .expect("Unable to get state from accessible thet emitted event.");
 
-    // Lent from print_focussed_selected.c example
-    if unsafe { (*event).source.is_null() } {
-        return;
-    }
-    // Want to look in here later - Accident prevention
-    if unsafe { (*(*event).source).states.is_null() } {
-        return;
-    }
-
-    // Only the caret-moved events from NON-read-only text accessible objects are relevant to tow.
+    // Only the caret-moved events from !read-only text accessible objects are relevant to tow.
     // It seems 'EDITABLE' rules out terminals?
-    if unsafe {
-        atspi_state_set_contains(
-            (*(*event).source).states,
-            // AtspiStateType_ATSPI_STATE_EDITABLE,
-            ATSPI_STATE_READ_ONLY,
-        ) == gtypes::primitive::TRUE
-    } {
+    if s_stateset.contains(StateType::ReadOnly) {
         return;
     }
 
@@ -328,30 +322,36 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
 
     let pdata = voidptr_data as *mut (CaretTowState, xcb::base::Connection, i32);
 
-    let atspi_text_iface = unsafe { atspi_accessible_get_text_iface((*event).source) };
-    let atspi_caret_offset = unsafe { atspi_text_get_caret_offset(atspi_text_iface, null_mut()) };
-    let atspi_id: i32 = unsafe { atspi_accessible_get_id((*event).source, null_mut()) } as i32;
+    // Rust assures we'll never consume the lent cake, we are nevertheless allowed to destructure it!
+    let (state, conn, screen_num) = unsafe { pdata.as_mut().expect("NULL pointer passed!") };
 
     // === Surrogate caret position:
     // Caret coordinates are not available, however
     // the bounding box of the glyph at the caret offset is available.
+    // that will do just fine:
     //
-    let glyph_extents = unsafe {
-        atspi_text_get_character_extents(
-            atspi_text_iface,
-            atspi_caret_offset,
-            ATSPI_COORD_TYPE_SCREEN,
-            null_mut(), // GError
-        )
-    };
+    let atspi_caret_offset: i32;
+    let glyph_extents: Rect;
 
-    let caret_coords_now = unsafe { Point((*glyph_extents).x as i32, (*glyph_extents).y as i32) };
+    if let Some(atspi_text_iface) = s_accessible.get_text_iface() {
+        atspi_caret_offset = atspi_text_iface
+            .get_caret_offset()
+            .expect("Could not obtain caret offcset! ");
+        glyph_extents = atspi_text_iface
+            .get_character_extents(atspi_caret_offset, CoordType::Screen)
+            .expect("Could not obtain character extents");
+    } else {
+        eprintln!("Unexpectedly no text interface on accessible in raised event.");
+        return;
+    }
+
+    let caret_coords_now = Point(glyph_extents.get_x(), glyph_extents.get_y());
     if caret_coords_now == Point(0, 0) {
         return;
     }
 
-    // Rust assures we'll never consume the lent cake, however we are allowed to destructure it!
-    let (state, conn, screen_num) = unsafe { pdata.as_mut().expect("NULL pointer passed!") };
+    let atspi_id = s_accessible.get_id().expect("No accessible id.");
+
     let pointer_coords_now: Point = get_pointer_coords_now(conn, *screen_num);
 
     let periodically = |dur, state: &mut CaretTowState| {

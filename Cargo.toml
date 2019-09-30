@@ -9,9 +9,9 @@ authors = ["Luuk van der Duim <luukvanderduim@gmail.com>"]
 daemonize = "0.4"
 libc = "0.2"
 gtypes = "0.2"
-xcb = "0.8"
 clap = "2.33"
 rand = "0.7.2"
+xcb = "0.8.2"
 
 [dependencies.atspi]
 git = "https://github.com/luukvanderduim/atspi"
@@ -19,10 +19,15 @@ git = "https://github.com/luukvanderduim/atspi"
 [dependencies.atspi-sys]
 git = "https://github.com/luukvanderduim/atspi-sys"
 
-[dependencies.glib_sys]
+[dependencies.gobject-sys]
+git = "https://github.com/gtk-rs/sys"
+package = "gobject-sys"
+
+[dependencies.glib]
+git = "https://github.com/gtk-rs/glib"
+package = "glib"
+
+[dependencies.glib-sys]
 git = "https://github.com/gtk-rs/sys"
 package = "glib-sys"
 
-[dependencies.gobject_sys]
-git = "https://github.com/gtk-rs/sys"
-package = "gobject-sys"
