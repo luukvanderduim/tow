@@ -36,11 +36,10 @@ use xcb::base::Connection;
 use xcb::ffi::base::XCB_NONE;
 
 use atspi::{
-    Accessible, AccessibleExt, CoordType, Event, Rect, StateSetExt, StateType, Text, TextExt,
+    Accessible, AccessibleExt, CoordType, Event, Rect, StateSet, StateSetExt, StateType, TextExt,
 };
 use atspi_sys::*;
 
-// static mut SLIDE_DUR: Duration = Duration::from_millis(500);
 const SLIDE_DUR: Duration = Duration::from_millis(500);
 const FRAME_CALC: u64 = (1000.0 / 30.0) as u64;
 const FRAME_DUR: Duration = Duration::from_millis(FRAME_CALC);
@@ -100,8 +99,7 @@ impl CaretTowState {
 
 #[derive(Clone, Copy, Debug)]
 enum Behavior {
-    Interval { dur: Duration },
-    PerQty { nc: u32 },
+    Pulse { dur: Duration },
     Typewriter,
 }
 
@@ -301,18 +299,19 @@ fn get_pointer_coords_now(conn: &Connection, screen_num: i32) -> Point {
 }
 
 extern "C" fn destroy_evgarbage(data: gpointer) {
-    unsafe { glib_sys::g_free(data) }; // gpointer cleaned by gfree
+    // unsafe {  glib_sys::g_free(data) }; // gpointer cleaned by gfree
 }
 
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
-    // I assume the glib conversion checks for NULL
+    // get the accessible that caused this event
+    // and get the state set associated with this accessible
     let s_accessible: Accessible = unsafe { from_glib_borrow((*event).source) };
-    let s_stateset = s_accessible
+    let s_stateset: StateSet = s_accessible
         .get_state_set()
         .expect("Unable to get state from accessible thet emitted event.");
 
-    // Only the caret-moved events from !read-only text accessible objects are relevant to tow.
-    // It seems 'EDITABLE' rules out terminals?
+    // Only the caret-moved events from Not-read-only text accessible objects are relevant to tow.
+    // It seems 'Editable' rules out terminals?
     if s_stateset.contains(StateType::ReadOnly) {
         return;
     }
@@ -351,10 +350,9 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     }
 
     let atspi_id = s_accessible.get_id().expect("No accessible id.");
-
     let pointer_coords_now: Point = get_pointer_coords_now(conn, *screen_num);
 
-    let periodically = |dur, state: &mut CaretTowState| {
+    let pulse = |dur, state: &mut CaretTowState| {
         if !state.mvset {
             state.mvset = true;
             state.accessible_id = Some(atspi_id);
@@ -365,7 +363,6 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
 
         // During acquisition of caret events,
         // the origin of the events needs to be the same
-        // Otherwise we see unwanted slides.
 
         if state.accessible_id.unwrap() != atspi_id {
             state.reset();
@@ -397,63 +394,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         }
     };
 
-    // 'Move per X events is fine, until:
-    // - somewhere between 0..X the pointer is moved
-    // and with it the view port.
-
-    let glyphcnt = |nc, state: &mut CaretTowState| {
-        if !state.mvset {
-            state.mvset = true;
-            state.accessible_id = Some(atspi_id);
-            state.glyph_coords_begin = Some(caret_coords_now);
-            state.pointer_at_begin = Some(pointer_coords_now);
-            state.counter = 0;
-        }
-
-        // During acquisition of caret events,
-        // the origin of the events needs to be the same
-        // Otherwise we see unwanted slides.
-
-        if state.accessible_id.unwrap() != atspi_id {
-            state.reset();
-            // return in anticipation of an event that originates from current id
-            return;
-        }
-        // Tow needs to learn to discern synthetic moves from device moves.
-        // until then the cure is worse than the disease
-        // thus disable the check below
-        //
-        /*
-        if state.pointer_at_begin.expect("state: no begin") != pointer_coords_now {
-            state.reset();
-            return;
-        } */
-
-        if state.counter == 0 {
-            state.counter = 1;
-            state.pointer_caret_offset();
-        } else if state.counter > 0 && state.counter < nc {
-            state.counter += 1;
-            state.pointer_caret_offset(); // users can move pointer
-        } else if state.counter >= nc {
-            let destination = Point(
-                state.glyph_coords_begin.unwrap().0 + state.pointer_caret_offset.0,
-                state.glyph_coords_begin.unwrap().1 + state.pointer_caret_offset.1,
-            );
-            do_tow(
-                caret_coords_now.0 - state.glyph_coords_begin.unwrap().0,
-                caret_coords_now.1 - state.glyph_coords_begin.unwrap().1,
-                conn,
-                *screen_num,
-                destination,
-            );
-            state.reset();
-            state.prev_moved_to = Some(destination);
-            return;
-        }
-    };
-
-    let each_character = |state: &mut CaretTowState| {
+    let each_glyph = |state: &mut CaretTowState| {
         if !state.mvset {
             state.pointer_at_begin = Some(pointer_coords_now);
             state.glyph_coords_begin = Some(caret_coords_now);
@@ -481,9 +422,8 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
     };
 
     match state.behavior {
-        Behavior::Interval { dur } => periodically(dur, state),
-        Behavior::PerQty { nc } => glyphcnt(nc as u32, state),
-        Behavior::Typewriter => each_character(state),
+        Behavior::Pulse { dur } => pulse(dur, state),
+        Behavior::Typewriter => each_glyph(state),
     };
 }
 
@@ -529,12 +469,14 @@ fn main() {
                 .takes_value(false)
                 .help("Have tow be 'daemonized' / run in the background."),
         )
-        .arg(Arg::with_name("behavior")
-            .short("b")
-            .long("behavior")
-            .takes_value(true)
-            .help("Mode: charcnt [N:2-100] (# chars), interval [N: 100-10000] (ms) or typewriter (default)")
-            .max_values(2))
+        .arg(
+            Arg::with_name("behavior")
+                .short("b")
+                .long("behavior")
+                .takes_value(true)
+                .help("Mode: pulse [N: 100-10000] (ms) or typewriter (default)")
+                .max_values(2),
+        )
         .get_matches();
 
     if matches.is_present("daemon") {
@@ -544,32 +486,20 @@ fn main() {
     if matches.is_present("behavior") {
         let mut bvals = matches.values_of("behavior").expect("Unexpected!");
         match bvals.next() {
-            Some("charcnt") => {
-                if let Some(numb) = bvals.next() {
-                    let n = numb.parse::<u8>().expect("u8 parse error");
-                    if n <= 1 {
-                        cts.behavior = Behavior::Typewriter;
-                    } else if n > 1 && n <= 100 {
-                        cts.behavior = Behavior::PerQty { nc: u32::from(n) };
-                    } else {
-                        cts.behavior = Behavior::PerQty { nc: 100_u32 };
-                    }
-                }
-            }
-            Some("interval") => {
+            Some("pulse") => {
                 if let Some(numb) = bvals.next() {
                     let n = numb.parse::<u16>().expect("u16 parse error");
                     if n <= 99 {
-                        cts.behavior = Behavior::Interval {
+                        cts.behavior = Behavior::Pulse {
                             dur: Duration::from_millis(100),
                         };
                     }
                     if n >= 100 && n <= 10000 {
-                        cts.behavior = Behavior::Interval {
+                        cts.behavior = Behavior::Pulse {
                             dur: Duration::from_millis(u64::from(n)),
                         };
                     } else {
-                        cts.behavior = Behavior::Interval {
+                        cts.behavior = Behavior::Pulse {
                             dur: Duration::from_millis(10000),
                         };
                     }
@@ -579,10 +509,10 @@ fn main() {
                 cts.behavior = Behavior::Typewriter;
             }
             Some(&_) => {
-                eprintln!("Error: Invalid behavior value. Typo?");
+                eprintln!("Error: Invalid 'behavior' value. Typo?");
             }
             None => {
-                eprintln!("Error: Invalid behavior value.");
+                eprintln!("Error: Invalid 'behavior'  value.");
             }
         }
     }
