@@ -3,16 +3,15 @@
 * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #![warn(clippy::all)]
-#![feature(extern_types)]
-#![feature(type_ascription)]
 #![allow(non_camel_case_types)]
 
 /// Tow
 ///
 /// An convenience helper program for desktop zoom users.
-/// Tow has the zoom area be towed by the keyboard caret.
-/// It is made for the Xfce4 desktop, but not bound to.
-/// It might work with other desktop environments aswell.
+/// Tow lets the zoom area be towed by the keyboard caret.
+/// It is made with the Xfwm4 desktop zoom in mind,
+/// but it is not purposely restricted to it.
+/// It might work in other desktop environments aswell.
 
 #[macro_use]
 extern crate clap;
@@ -21,6 +20,7 @@ use clap::{App, Arg};
 use daemonize::Daemonize;
 
 use glib::translate::*;
+use glib::Error;
 
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
@@ -36,7 +36,8 @@ use xcb::base::Connection;
 use xcb::ffi::base::XCB_NONE;
 
 use atspi::{
-    Accessible, AccessibleExt, CoordType, Event, Rect, StateSet, StateSetExt, StateType, TextExt,
+    Accessible, AccessibleExt, CoordType, Event, Rect, StateSet, StateSetExt, StateType, Text,
+    TextExt,
 };
 use atspi_sys::*;
 
@@ -101,6 +102,41 @@ impl CaretTowState {
 enum Behavior {
     Pulse { dur: Duration },
     Typewriter,
+}
+
+fn get_caret_coords_in_focussed_accessible() -> Result<Option<Point>, Error> {
+    let mut ret: Result<Option<Point>, Error> = Ok(None);
+    for n in 0..atspi::get_desktop_count() {
+        println!("Desktop number: {} ", &n);
+        match atspi::other::get_desktop(n) {
+            Some(desktop) => {
+                let cnt: i32 = desktop.get_child_count()?;
+                println!("{} number of children", &cnt);
+                for i in 0..cnt {
+                    let app: Accessible = desktop.get_child_at_index(i)?;
+                    println!("child at index {}, accessible handle", &i);
+
+                    if let Some(sset) = app.get_state_set() {
+                        if sset.contains(StateType::Focused) {
+                            if let Some(ti) = app.get_text_iface() {
+                                println!("Focused child has text interface");
+                                let o: i32 = ti.get_caret_offset()?;
+                                let ext: Rect = ti.get_character_extents(o, CoordType::Screen)?;
+
+                                return Ok(Some(Point(ext.get_x(), ext.get_y())));
+                            }
+                        }
+                    } //  SteteSet is None
+                } // for loop # in desktop #
+            }
+
+            _ => {
+                ret = Ok(None);
+            }
+        }; // end of match
+    } // for loop over
+    println!("No more desktops to go through");
+    ret
 }
 
 //  .map(|x| (E.powf(x) - E.powf(-x)) / (E.powf(x) + E.powf(-x))) // tanh
@@ -298,8 +334,8 @@ fn get_pointer_coords_now(conn: &Connection, screen_num: i32) -> Point {
     }
 }
 
-extern "C" fn destroy_evgarbage(data: gpointer) {
-    // unsafe {  glib_sys::g_free(data) }; // gpointer cleaned by gfree
+extern "C" fn brooming(data: gpointer) {
+    unsafe { glib_sys::g_free(data) }; // gpointer cleaned by gfree
 }
 
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os::raw::c_void) {
@@ -374,7 +410,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::os
         // until then the cure is worse than the disease
         // thus disable the check below
         //
-        /*         if state.pointer_at_begin.unwrap() != pointer_coords_now {
+        /*if state.pointer_at_begin.unwrap() != pointer_coords_now {
             state.mvset = false;
             state.reset();
             return;
@@ -520,29 +556,50 @@ fn main() {
     let (conn, screen_num) = xcb::Connection::connect(None).expect("Failed xcb connection.");
     cts.pointer_at_begin = Some(get_pointer_coords_now(&conn, screen_num));
 
-    let mut triplet = (cts, conn, screen_num);
-
-    let voidptr_data =
-        &mut triplet as *mut (CaretTowState, xcb::base::Connection, i32) as *mut libc::c_void;
-    let evfn: AtspiEventListenerCB = Some(on_caret_move);
-    let post_event_chores: GDestroyNotify = Some(destroy_evgarbage);
-
-    // AT-SPI event listener
-    let listener = unsafe { atspi_event_listener_new(evfn, voidptr_data, post_event_chores) };
-
     // AT-SPI init
     if unsafe { atspi_init() } != 0 {
         panic!("Could not initialise AT-SPI.");
     }
 
-    let evtype = CString::new("object:text-caret-moved")
+    match get_caret_coords_in_focussed_accessible() {
+        Ok(caret_at_start) => {
+            match caret_at_start {
+                Some(pos) => {
+                    println!("caret at start: Point({},{})", pos.0, pos.1);
+                }
+                None => {
+                    println!("No postition");
+                }
+            }
+
+            cts.glyph_coords_begin = caret_at_start;
+        }
+        Err(error) => {
+            eprintln!("{:?}", error);
+        }
+    }
+
+    let mut triplet = (cts, conn, screen_num);
+
+    let voidptr_data =
+        &mut triplet as *mut (CaretTowState, xcb::base::Connection, i32) as *mut libc::c_void;
+    let evfn: AtspiEventListenerCB = Some(on_caret_move);
+    let post_event_chores: GDestroyNotify = Some(brooming);
+
+    // AT-SPI event listener
+    let listener = unsafe { atspi_event_listener_new(evfn, voidptr_data, post_event_chores) };
+
+    let evtype_caret_moved = CString::new("object:text-caret-moved")
         .expect("CString::new failed")
         .into_raw() as *const i8;
 
-    let err: *mut *mut GError = std::ptr::null_mut(); //Must do better
+    /* let evtype_focus_changed = CString::new("object:state-changed:focused")
+    .expect("CString::new failed")
+    .into_raw() as *const i8; */
 
+    let err: *mut *mut GError = std::ptr::null_mut();
     unsafe {
-        atspi_event_listener_register(listener, evtype, err);
+        atspi_event_listener_register(listener, evtype_caret_moved, err);
     }
 
     Event::main();
@@ -552,8 +609,8 @@ fn main() {
     }
 
     unsafe {
-        gobject_sys::g_object_unref(err as *mut gobject_sys::GObject); // as GError
-        glib_sys::g_free(evtype as gpointer);
+        gobject_sys::g_object_unref(err as *mut _); // as GError
+        glib_sys::g_free(evtype_caret_moved as gpointer);
         gobject_sys::g_object_unref(listener as *mut gobject_sys::GObject);
         gobject_sys::g_object_unref(voidptr_data as *mut gobject_sys::GObject);
     }

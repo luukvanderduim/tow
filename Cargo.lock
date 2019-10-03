@@ -11,7 +11,7 @@ dependencies = [
 [[package]]
 name = "atspi"
 version = "0.1.0"
-source = "git+https://github.com/luukvanderduim/atspi#480ae20d3c9bd08497599a96dd359aad21662c36"
+source = "git+https://github.com/luukvanderduim/atspi#946473531f22feca113fda1e7e2158bb7d5f124e"
 dependencies = [
  "atspi-sys 0.0.1 (git+https://github.com/luukvanderduim/atspi-sys)",
  "bitflags 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -108,7 +108,7 @@ dependencies = [
 [[package]]
 name = "glib"
 version = "0.8.0"
-source = "git+https://github.com/gtk-rs/glib#67869890a4f52539250faebf0fa542b8953469b9"
+source = "git+https://github.com/gtk-rs/glib#2ad3ad8952dbaf78837e27193af8f0a003522815"
 dependencies = [
  "bitflags 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "glib-sys 0.9.0 (git+https://github.com/gtk-rs/sys)",
