@@ -8,7 +8,7 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/target/debug/tow",
+            "program": "${workspaceFolder}/target/x86_64-unknown-linux-gnu/debug/tow",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
