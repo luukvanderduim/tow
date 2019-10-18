@@ -27,7 +27,7 @@
             "name": "(gdb) Attach",
             "type": "cppdbg",
             "request": "attach",
-            "program": "enter program name, for example ${workspaceFolder}/a.out",
+            "program": "${workspaceFolder}/target/x86_64-unknown-linux-gnu/debug/tow",
             "processId": "${command:pickProcess}",
             "MIMode": "gdb",
             "setupCommands": [
@@ -42,7 +42,7 @@
             "type": "gdb",
             "request": "launch",
             "name": "tow",
-            "target": "./target/debug/tow",
+            "target": "${workspaceFolder}/target/x86_64-unknown-linux-gnu/debug/tow",
             "cwd": "${workspaceRoot}"
         },
         {
@@ -51,10 +51,8 @@
             "sourceLanguages": [
                 "rust"
             ],
-            "name": "Debug",
-            "program": "${workspaceRoot}/target/debug/tow",
-            //"program": "${workspaceRoot}/target/debug/${workspaceRootFolderName}",
-            //"program": "/home/luuk/src/rust/tow/target/debug/tow",
+            "name": "Debug-Rust-LLDB",
+            "program": "${workspaceFolder}/target/x86_64-unknown-linux-gnu/debug/tow",
             "args": [],
             "cwd": "${workspaceRoot}"
         }

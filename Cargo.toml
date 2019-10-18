@@ -7,10 +7,12 @@ authors = ["Luuk van der Duim <luukvanderduim@gmail.com>"]
 
 [dependencies]
 daemonize = "0.4"
-tokio = "0.1"
 libc = "0.2"
 gtypes = "0.2"
 clap = "2.33"
+crossbeam = "0.7"
+crossbeam-utils = "0.6"
+crossbeam-channel = "0.3.9"
 rand = "0.7.2"
 
 [dependencies.xcb]
@@ -19,9 +21,11 @@ version = "0.8.2"
 
 [dependencies.atspi]
 git = "https://github.com/luukvanderduim/atspi"
+# path = "../gtk-rs/sys/atspi"
 
 [dependencies.atspi-sys]
 git = "https://github.com/luukvanderduim/atspi-sys"
+# path = "../gtk-rs/sys/atspi-sys"
 
 [dependencies.gobject-sys]
 git = "https://github.com/gtk-rs/sys"
@@ -51,14 +55,11 @@ lto = false        # Link Time Optimization usually reduces size of binaries
                    # be passed.
 debug-assertions = true # controls whether debug assertions are enabled
                    # (e.g., debug_assert!() and arithmetic overflow checks)
-codegen-units = 16 # if > 1 enables parallel code generation which improves
+codegen-units = 8 # if > 1 enables parallel code generation which improves
                    # compile times, but prevents some optimizations.
                    # Passes `-C codegen-units`.
-panic = 'unwind'   # panic strategy (`-C panic=...`), can also be 'abort'
-incremental = true # whether or not incremental compilation is enabled
-                   # This can be overridden globally with the CARGO_INCREMENTAL
-                   # environment variable or `build.incremental` config
-                   # variable. Incremental is only used for path sources.
+
+incremental = true
 overflow-checks = true # use overflow checks for integer arithmetic.
                    # Passes the `-C overflow-checks=...` flag to the compiler.
 
@@ -70,8 +71,7 @@ debug = false
 rpath = false
 lto = true
 debug-assertions = false
-codegen-units = 16
-panic = 'unwind'
+codegen-units = 1
 incremental = false
 overflow-checks = false
 
@@ -84,7 +84,6 @@ rpath = false
 lto = false
 debug-assertions = true
 codegen-units = 16
-panic = 'unwind'
 incremental = true
 overflow-checks = true
 
@@ -96,7 +95,6 @@ debug = false
 rpath = false
 lto = false
 debug-assertions = false
-codegen-units = 16
-panic = 'unwind'
+codegen-units = 1
 incremental = false
 overflow-checks = false
