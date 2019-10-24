@@ -50,9 +50,10 @@ use atspi::{
     Accessible, AccessibleExt, CoordType, Event, StateSet, StateSetExt, StateType, TextExt,
 };
 use atspi_sys::*;
+//use crossbeam_utils::sync::Parker;
 
-const SLIDE_DUR: Duration = Duration::from_millis(433);
-const FRAME_CALC: u64 = (1000.0 / 24.0) as u64;
+const SLIDE_DUR: Duration = Duration::from_millis(621);
+const FRAME_CALC: u64 = (1000.0 / 60.0) as u64;
 const FRAME_DUR: Duration = Duration::from_millis(FRAME_CALC);
 const BIG: f64 = 1000.0;
 
@@ -294,19 +295,16 @@ fn obtain_pointer_coords_now(co: Arc<Connection>, screen_num: i32) -> Option<Poi
     }
 }
 
-fn tow(
-    rx: Receiver<Move>,
-    up: &Unparker,
-    q: crossbeam_utils::sync::Parker,
-    co: Arc<Connection>,
-    screen_num: i32,
-) {
+fn tow(rx: Receiver<Move>, up: &Unparker, q: Parker, co: Arc<Connection>, screen_num: i32) {
+    let mut begin: Point = Point(0, 0);
+    let mut dx: i32 = 0;
+    let mut dy: i32 = 0;
     loop {
         let var = rx.clone().into_iter();
         for mv in var {
-            let begin: Point = mv.0;
-            let dx: i32 = mv.1;
-            let dy: i32 = mv.2;
+            begin = mv.0;
+            dx = mv.1;
+            dy = mv.2;
             do_tow(begin, dx, dy, co.clone(), screen_num);
         }
         up.unpark();
@@ -324,85 +322,108 @@ fn pulse_thread(
     tx: Sender<Move>,
 ) {
     loop {
+        // In this loop we ONLY act on state
+        // STATE CHANGE is caused by events
+        //
+
         p.park_timeout(dur.to_owned());
+        let now = obtain_pointer_coords_now(conn.clone(), screen_num).unwrap();
         if state.move_flag() {
-            state.set_pointer_coords_now(obtain_pointer_coords_now(conn.clone(), screen_num));
             match state.get_prev_moved_to() {
-                Some(expected)
-                    if expected != state.get_pointer_coords_now().expect("Coordinates: None") =>
-                {
-                    // The pointer was moved by user
-                    // Where 'user moved to' is not 'where we are'
+                Some(then) if then != now => {
+                    // USER MOVED POINTER
                     // refrain from move (postion is up to date)
+
                     state.set_prev_moved_to(state.get_pointer_coords_now());
                     state.set_glyph_coords_begin(state.get_caret_coords_now());
                 }
 
-                Some(expected) if expected == state.get_pointer_coords_now().unwrap() => {
-                    // do_tow() expects the Point where we begin:
+                Some(then) if then == now => {
+                    // The executor loop thread was parked for dur: Duration
+                    // The pointer did not move. Fine.
+
+                    // do_tow() requires:
                     // the current pointer position
                     // and the amount of x and y to move:
-                    let (deltax, deltay) = {
-                        let now = state.get_caret_coords_now().expect("Caret : None");
-                        let begin = state.get_glyph_coords_begin().expect("Caret : None");
 
-                        (now.0 - begin.0, now.1 - begin.1)
-                    };
+                    if let Some(caret_now) = state.get_caret_coords_now() {
+                        if let Some(caret_begin) = state.get_glyph_coords_begin() {
+                            // If the caret did not move, there is nothing to do.
+                            if caret_begin == caret_now {
+                                continue;
+                            }
 
-                    let aim = {
-                        let pbegin = state.get_pointer_coords_now().expect("aim: p co now ");
-                        Point(pbegin.0 + deltax, pbegin.1 + deltay)
-                    };
+                            let (deltax, deltay) =
+                                { (caret_now.0 - caret_begin.0, caret_now.1 - caret_begin.1) };
+                            let aim = now + Point(deltax, deltay);
 
-                    if expected == aim {
-                        continue;
+                            match tx.send((now, deltax, deltay)) {
+                                Ok(()) => {
+                                    state.set_prev_moved_to(Some(aim));
+                                    state.set_glyph_coords_begin(state.get_caret_coords_now());
+                                    uq.unpark();
+                                }
+                                Err(e) => {
+                                    eprintln!("Cannot send move to tow {:?}", e);
+                                }
+                            }
+                        }
                     }
-
-                    if (deltax, deltay) == (0, 0) {
-                        continue;
-                    }
-
-                    state.set_prev_moved_to(state.get_pointer_coords_now());
-                    state.pointer_caret_offset();
-
-                    tx.send((state.get_pointer_coords_now().unwrap(), deltax, deltay))
-                        .expect("send failure");
-                    uq.unpark();
                 }
                 None => {
-                    let (deltax, deltay) = {
-                        let now = state.get_caret_coords_now().expect("dxdy: ca co now");
-                        let begin = state.get_glyph_coords_begin().expect("dxdy gly co begin");
-                        (now.0 - begin.0, now.1 - begin.1)
-                    };
+                    if let Some(caret_now) = state.get_caret_coords_now() {
+                        if let Some(caret_begin) = state.get_glyph_coords_begin() {
+                            let (deltax, deltay) =
+                                { (caret_now.0 - caret_begin.0, caret_now.1 - caret_begin.1) };
 
-                    if (deltax, deltay) == (0, 0) {
-                        continue;
+                            // If the caret did not move, there is nothing to do.
+                            if caret_now == caret_begin {
+                                continue;
+                            }
+
+                            let aim = now + Point(deltax, deltay);
+
+                            match tx.send((now, deltax, deltay)) {
+                                Ok(()) => {
+                                    state.set_prev_moved_to(Some(aim));
+                                    state.set_glyph_coords_begin(state.get_caret_coords_now());
+                                    uq.unpark();
+                                }
+                                Err(e) => {
+                                    eprintln!("Cannot send move to tow {:?}", e);
+                                }
+                            }
+                        }
                     }
-
-                    state.set_prev_moved_to(state.get_pointer_coords_now());
-                    state.pointer_caret_offset();
-
-                    tx.send((state.get_pointer_coords_now().unwrap(), deltax, deltay))
-                        .expect("send failure");
-                    uq.unpark();
                 }
                 _ => {
                     dbg!("We are not supposed to get here?");
                 }
             }
-
-            // Glyph coords information might have been found in a focus event
-            // prior to this event
-            // if so, we set focus_found_glyph as the begin
-            // otherwise we set caret coords of this event as begin
-            if let Some(focus_glyph) = state.focus_found_glyph() {
-                state.set_glyph_coords_begin(Some(focus_glyph));
-                state.set_focus_found_glyph(None);
-            } else {
-                state.set_glyph_coords_begin(state.get_caret_coords_now());
+        } else {
+            // move_flag false
+            if let Some(caret_now) = state.get_caret_coords_now() {
+                if let Some(caret_begin) = state.get_glyph_coords_begin() {
+                    // If the caret did not move, there is nothing to do.
+                    if caret_begin == caret_now {
+                        continue;
+                    }
+                    let (offset_x, offset_y) = state.get_pointer_caret_offset();
+                    let aim = now + Point(offset_x, offset_y);
+                    match tx.send((caret_now, offset_x, offset_y)) {
+                        Ok(()) => {
+                            state.set_prev_moved_to(Some(aim));
+                            state.set_glyph_coords_begin(state.get_caret_coords_now());
+                            uq.unpark();
+                        }
+                        Err(e) => {
+                            eprintln!("Cannot send move to tow {:?}", e);
+                        }
+                    }
+                }
             }
         }
+        std::thread::yield_now();
     } // belongs to loop
 }
 
@@ -412,57 +433,120 @@ extern "C" fn brooming(data: gpointer) {
 
 #[no_mangle]
 extern "C" fn on_focus_changed(event: *mut AtspiEvent, voidptr_data: *mut ::std::ffi::c_void) {
-    let s_accessible: Accessible = unsafe { from_glib_full((*event).source) };
+    let ev_source: Accessible = unsafe { from_glib_full((*event).source) };
+    let ev_detail1 = unsafe { (*event).detail1 } as i32;
 
-    let atspi_id: i32 = 0; // It is set or we return
-    match s_accessible.get_id() {
-        Ok(atspi_id) => atspi_id,
-        Err(e) => {
-            eprintln!("Caret move but no accessbie id, {:?}", e);
-            return;
+    let pdata = voidptr_data as *mut (Arc<CaretTowState>, Arc<Connection>, i32);
+    let (state, conn, screen_num) = unsafe { pdata.as_mut().expect("Wonderous machine error!") };
+
+    // Lets check if the fucus was changed by an Accessible source with a editable
+    // text interface. eg. not a pop-up message or a progress bar message or some other
+    // message widget we are not about to edit.
+    let acc_stateset: StateSet = ev_source
+        .get_state_set()
+        .expect("Unable to get state from accessible thet emited event.");
+    if acc_stateset.contains(StateType::ReadOnly) {
+        return;
+    }
+
+    // In focus ev
+    //
+    // If its the first accessible in a move to get focus, set ID
+    // (atspi_id was None )
+    //  - set glyph_begin and caret now to found coordinates
+    //
+    //
+    // If the user caused the focus ev:
+    //  that is: if prev moved to != current
+    // - update id
+    // - set glyph_begin and caret now to found coordinates
+    // - set pointer_caret_offset
+    //
+    //
+    // If the user did not cause the focus ev
+    // == Choice == move or not to move
+    // - change id
+    // - induce move
+    let current_pointer = obtain_pointer_coords_now(conn.clone(), screen_num.to_owned()).unwrap();
+
+    let update_glyph_and_caret = || {
+        // On focus change we want to set the caret coordinates in the global state
+        // because this is likely our first opportunity
+        if let Some(atspi_text_iface) = ev_source.get_text_iface() {
+            match atspi_text_iface.get_character_extents(ev_detail1, CoordType::Screen) {
+                Err(e) => {
+                    println!("No rect on caret offset, {:?}", &e);
+                }
+                Ok(glyph_extents) => {
+                    state.set_caret_coords_now(Some(Point(
+                        glyph_extents.get_x(),
+                        glyph_extents.get_y(),
+                    )));
+                    state.set_glyph_coords_begin(Some(Point(
+                        glyph_extents.get_x(),
+                        glyph_extents.get_y(),
+                    )));
+                }
+            }
         }
     };
 
-    let pdata = voidptr_data as *mut (Arc<CaretTowState>, Arc<Connection>, i32);
-    let (state, _, _) = unsafe { pdata.as_mut().expect("Strange machine error!") };
+    let ev_id: Option<i32> = None;
+    if state.get_accessible_id().is_none() {
+        match ev_source.get_id() {
+            Ok(ev_id) => {
+                state.set_accessible_id(Some(ev_id));
+                update_glyph_and_caret();
 
-    // On focus change we want to set the caret coordinates in the global state
-
-    if let Some(atspi_text_iface) = s_accessible.get_text_iface() {
-        match atspi_text_iface.get_caret_offset() {
-            Err(e) => {
-                eprintln!("No caret offset, {:?}", &e);
+                state.pointer_caret_offset();
                 return;
             }
-            Ok(atspi_caret_offset) => {
-                match atspi_text_iface.get_character_extents(atspi_caret_offset, CoordType::Screen)
-                {
-                    Err(e) => {
-                        eprintln!("No rect at caret offset, {:?}", e);
-                        return;
-                    }
-                    Ok(glyph_extents) => {
-                        state.set_move_flag(false);
-                        state.set_accessible_id(Some(atspi_id));
-
-                        state.set_focus_found_glyph(Some(Point(
-                            glyph_extents.get_x(),
-                            glyph_extents.get_y(),
-                        )));
-                    }
-                };
+            Err(e) => {
+                eprintln!("Error geting accessibles id: {:?}", e);
             }
-        };
+        }
+    }
+
+    if let Some(prev) = state.get_prev_moved_to() {
+        if current_pointer != prev {
+            // user caused focus change by moving (mouse) pointer
+            // to other editable text of interest
+            update_glyph_and_caret();
+            state.set_pointer_coords_now(Some(current_pointer));
+            state.pointer_caret_offset();
+            state.set_accessible_id(ev_id);
+        } else {
+            // Some other event caused focus change
+            // Popup with editable text, we want to go there
+            // We may want to go there with sane defaults and set  move
+            state.set_accessible_id(ev_id);
+            state.set_move_flag(false); // induce move
+            return;
+        }
     }
 }
 
 #[no_mangle]
 extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::ffi::c_void) {
+    //
+    //  Event {
+    //      type: class:major:minor eg. 'object:caret-cursor-changed;
+    //      source: Accessible  belonging to the application that caused the event
+    //      detail1: deoends on the type.[1]
+    //      detail2: deoends on the type
+    //      user_data: depends on the type
+    //      sender: Accessible (>=v2.34) equals source except when the event is caused by the A11y client
+    //  }
+    //
+    //  [1] <https://accessibility.linuxfoundation.org/a11yspecs/atspi/adoc/atspi-events.html>
+    //
     // get the accessible that caused this event
     // and get the state set associated with this accessible
 
-    let ev_accessible: Accessible = unsafe { from_glib_full((*event).source) };
-    let acc_stateset: StateSet = ev_accessible
+    let ev_source: Accessible = unsafe { from_glib_full((*event).source) };
+    let ev_detail1 = unsafe { (*event).detail1 } as i32;
+
+    let acc_stateset: StateSet = ev_source
         .get_state_set()
         .expect("Unable to get state from accessible thet emitted event.");
 
@@ -486,38 +570,39 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::ff
     // the bounding box of the glyph at the caret offset is available.
     // that will do just fine:
     //
-    if let Some(atspi_text_iface) = ev_accessible.get_text_iface() {
-        match atspi_text_iface.get_caret_offset() {
+    if let Some(atspi_text_iface) = ev_source.get_text_iface() {
+        match atspi_text_iface.get_character_extents(ev_detail1, CoordType::Screen) {
             Err(e) => {
-                println!("No caret offset, {:?}", &e);
+                println!("No rect on caret offset, {:?}", &e);
                 return;
             }
-            Ok(atspi_caret_offset) => {
-                match atspi_text_iface.get_character_extents(atspi_caret_offset, CoordType::Screen)
-                {
-                    Err(e) => {
-                        println!("No rect on caret offset, {:?}", &e);
-                        return;
-                    }
-                    Ok(glyph_extents) => {
-                        state.set_caret_coords_now(Some(Point(
-                            glyph_extents.get_x(),
-                            glyph_extents.get_y(),
-                        )));
-                    }
-                };
+            Ok(glyph_extents) => {
+                state.set_caret_coords_now(Some(Point(
+                    glyph_extents.get_x(),
+                    glyph_extents.get_y(),
+                )));
             }
-        };
+        }
     }
 
-    let atspi_id: i32 = 0; // it is set or we return
-    match ev_accessible.get_id() {
-        Ok(atspi_id) => atspi_id,
+    match ev_source.get_id() {
+        Ok(atspi_id) => {
+            if let Some(id) = state.get_accessible_id() {
+                if id != atspi_id {
+                    // found id but of different application
+                    // this should not be
+                    eprint!("found id but of different application");
+                }
+            } else if state.get_accessible_id().is_none() {
+                state.set_accessible_id(Some(atspi_id));
+            }
+        }
         Err(e) => {
             eprintln!("Caret move but no accessbie id, {:?}", e);
             return;
         }
     };
+    let atspi_id = state.get_accessible_id().unwrap();
     // During acquisition of caret events,
     // the origin of the events needs to be the same
 
@@ -526,10 +611,7 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::ff
         screen_num.to_owned(),
     ));
 
-    if state.get_accessible_id().is_some()
-        && state.move_flag()
-        && state.get_accessible_id().unwrap() != atspi_id
-    {
+    if state.move_flag() && state.get_accessible_id().unwrap() != atspi_id {
         state.set_glyph_coords_begin(state.get_caret_coords_now());
         state.pointer_caret_offset();
         state.set_move_flag(false);
@@ -782,9 +864,12 @@ fn main() {
         let conn = Arc::clone(&conn);
         let cts = Arc::clone(&cts);
 
-        s.spawn(move |_| {
-            Event::main();
-        });
+        s.builder()
+            .name("Tow AT-SPI event thread".to_string())
+            .spawn(move |_| {
+                Event::main();
+            })
+            .unwrap();
 
         if let Behavior::Pulse { dur } = cts.get_behavior() {
             let p = Parker::new();
@@ -795,22 +880,30 @@ fn main() {
             let (tx, rx) = crossbeam::channel::unbounded::<Move>();
             let conn_a = Arc::clone(&conn);
             let conn_b = Arc::clone(&conn);
-            s.spawn(move |_| {
-                pulse_thread(
-                    cts.clone(),
-                    conn_a.clone(),
-                    screen_num.to_owned(),
-                    dur,
-                    &uq,
-                    p,
-                    tx,
-                );
-            });
+            let cts_a = Arc::clone(&cts);
+            let cts_b = Arc::clone(&cts);
+            s.builder()
+                .name("Captain Pulse".to_string())
+                .spawn(move |_| {
+                    pulse_thread(
+                        cts_a.clone(),
+                        conn_a.clone(),
+                        screen_num.to_owned(),
+                        dur,
+                        &uq,
+                        p,
+                        tx,
+                    );
+                })
+                .unwrap();
 
-            s.spawn(move |_| {
-                q.park();
-                tow(rx.clone(), &up, q, conn_b.clone(), screen_num.to_owned());
-            });
+            s.builder()
+                .name("ms Tow - tug thread".to_string())
+                .spawn(move |_| {
+                    q.park();
+                    tow(rx.clone(), &up, q, conn_b.clone(), screen_num.to_owned());
+                })
+                .unwrap();
         }
     })
     .expect("scope fault");

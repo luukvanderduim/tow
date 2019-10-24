@@ -67,7 +67,7 @@ overflow-checks = true # use overflow checks for integer arithmetic.
 # for `cargo test --release`, including the local library or binary).
 [profile.release]
 opt-level = 3
-debug = false
+debug = true
 rpath = false
 lto = true
 debug-assertions = false
@@ -83,7 +83,7 @@ debug = 2
 rpath = false
 lto = false
 debug-assertions = true
-codegen-units = 16
+codegen-units = 4
 incremental = true
 overflow-checks = true
 
@@ -93,8 +93,8 @@ overflow-checks = true
 opt-level = 3
 debug = false
 rpath = false
-lto = false
+lto = true
 debug-assertions = false
-codegen-units = 1
+codegen-units = 4
 incremental = false
 overflow-checks = false
