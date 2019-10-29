@@ -50,9 +50,8 @@ use atspi::{
     Accessible, AccessibleExt, CoordType, Event, StateSet, StateSetExt, StateType, TextExt,
 };
 use atspi_sys::*;
-//use crossbeam_utils::sync::Parker;
 
-const SLIDE_DUR: Duration = Duration::from_millis(621);
+const SLIDE_DUR: Duration = Duration::from_millis(866);
 const FRAME_CALC: u64 = (1000.0 / 60.0) as u64;
 const FRAME_DUR: Duration = Duration::from_millis(FRAME_CALC);
 const BIG: f64 = 1000.0;
@@ -881,7 +880,7 @@ fn main() {
             let conn_a = Arc::clone(&conn);
             let conn_b = Arc::clone(&conn);
             let cts_a = Arc::clone(&cts);
-            let cts_b = Arc::clone(&cts);
+
             s.builder()
                 .name("Captain Pulse".to_string())
                 .spawn(move |_| {
