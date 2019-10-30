@@ -1,4 +1,5 @@
-![Tow and its logo are a WIP](https://github.com/luukvanderduim/tow/blob/master/img/tugboat.png"Tow Tug Boat logo (WIP)")
+![Tow Logo](https://github.com/luukvanderduim/tow/blob/master/img/tugboat.png "Tow logo")
+
 # tow
 
     an ergonomy helper for desktop zoom users.
