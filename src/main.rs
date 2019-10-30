@@ -12,35 +12,24 @@
 /// It is made with the Xfwm4 desktop zoom in mind,
 /// but it is not purposely restricted to it.
 /// It might work in other desktop environments aswell.
-
-#[macro_use]
-extern crate clap;
-use clap::{App, Arg};
+use clap::{crate_version, App, Arg};
 
 use daemonize::Daemonize;
 
-use glib::translate::*;
+use glib::translate::from_glib_full;
 use glib_sys::{GDestroyNotify, GError};
 use gtypes::gpointer;
 
-use std::f64::consts::E;
-use std::ffi::CString;
-use std::fs::File;
-
-use std::time::Duration;
+use std::{f64::consts::E, ffi::CString, fs::File, sync::Arc, time::Duration};
 
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::{Receiver, Sender};
-
 use crossbeam_utils::sync::{Parker, Unparker};
-use std::sync::Arc;
 
 mod state;
 use state::{Behavior, CaretTowState};
 mod point;
 use point::Point;
-
-type Move = (Point, i32, i32);
 
 use xcb;
 use xcb::base::Connection;
@@ -49,12 +38,18 @@ use xcb::ffi::base::XCB_NONE;
 use atspi::{
     Accessible, AccessibleExt, CoordType, Event, StateSet, StateSetExt, StateType, TextExt,
 };
-use atspi_sys::*;
+
+use atspi_sys::{
+    atspi_event_listener_new, atspi_event_listener_register, atspi_exit, atspi_init, AtspiEvent,
+    AtspiEventListenerCB,
+};
 
 const SLIDE_DUR: Duration = Duration::from_millis(866);
 const FRAME_CALC: u64 = (1000.0 / 60.0) as u64;
 const FRAME_DUR: Duration = Duration::from_millis(FRAME_CALC);
 const BIG: f64 = 1000.0;
+
+type Move = (Point, i32, i32);
 
 /* fn get_caret_coords_in_focussed_accessible() -> Result<Option<Point>, Error> {
     let mut ret: Result<Option<Point>, Error> = Ok(None);
@@ -295,15 +290,12 @@ fn obtain_pointer_coords_now(co: Arc<Connection>, screen_num: i32) -> Option<Poi
 }
 
 fn tow(rx: Receiver<Move>, up: &Unparker, q: Parker, co: Arc<Connection>, screen_num: i32) {
-    let mut begin: Point = Point(0, 0);
-    let mut dx: i32 = 0;
-    let mut dy: i32 = 0;
     loop {
         let var = rx.clone().into_iter();
         for mv in var {
-            begin = mv.0;
-            dx = mv.1;
-            dy = mv.2;
+            let begin = mv.0;
+            let dx = mv.1;
+            let dy = mv.2;
             do_tow(begin, dx, dy, co.clone(), screen_num);
         }
         up.unpark();
