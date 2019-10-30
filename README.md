@@ -1,4 +1,5 @@
 ![Tow Logo](https://github.com/luukvanderduim/tow/blob/master/img/tugboat.png "Tow logo by Coenraad E. Meijer")
+
 Tow and its accompanying tug boat image are very much a work in progress.
 
 # tow
@@ -6,7 +7,7 @@ Tow and its accompanying tug boat image are very much a work in progress.
     an ergonomy helper for desktop zoom users.
     Adding a little extra convenience to zoom.
 
-Tow has the zoom area be 'towed by the keyboard caret'.
+Tow has the zoom area be 'towed' by the keyboard caret.
 
 (The caret is possibly better known as 'text-cursor')
 
@@ -14,29 +15,24 @@ Tow is written to work with xfwm4 of the Xfce4 desktop,
 however it might work with other desktop environments as well.
 Your mileage may vary.
 
-Tow seeks to scratch an itch some users who depend on the zoom
-feature may have while working with zoom.
+Some users who depend on the zoom feature may benefit from tow.
 
-## Problem
-
- The user directs the zoomed view port position with the pointer device.
- (eg. the mouse, or any other pointer device.)
-
- Typically both hands are in use when typing and most users
- have no more than two hands.
- Whilst entering text, the caret moves, yet the zoomed view port stays put.
- Quickly the caret will be out of sight and the user now has to
- interrupt work to readjust the pointer position to once again have
- the zoomed view port match the caret's current position.
-
+## The problem tow solves
+ Zoom users zoom-in a portion of their screen.
+ Whilst typing some text, the text caret moves, yet the zoomed view port stays put. 
+ Consequently the text cursor will be out of sight soon, forcing the user to stop to readjust the view ports position using the mouse.
+ (Or some other pointer device.)
+ 
  This pattern will repeat and becomes a nuisance to some.
 
- for those people I wrote tow.
 
 ## The solution
 
  Tow aims to automate the readjusting by having the zoom view port
  be 'towed' by the caret.
+
+ Applications that use a widget toolkit that supports AT-SPI2 (such as GTK or Qt),
+ can share information regarding the carets position.
 
 ## Usage
 
@@ -48,43 +44,37 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-    -b, --behavior [ mode ] [ val ]    Mode: 'charcnt' [N:2-100] (# chars), 'interval' [N: 100-10000] (ms) or 'typewriter' [ - ] (default)
+    -b, --behavior [ mode ] [ val ]    Mode: 'pulse' [N: 100-10000] (ms) or 'typewriter' (default)
 
-    -s, --slide_duration [dur. in ms]  Duration of view port slide in ms [100-10000] only applies to charcnt and
-                                       interval modes, otherwise ignored [default: 500]
+    -s, --slide_duration [dur. in ms]  Duration of view port slide in ms [100-10000] only applies to pulse mode, otherwise ignored [default: 500]
 
 ## TO DO
 
 - Tow 'works' but it has (many) flaws.
 
-    Tow is not stable, let alone ready for a release.
+    Tow is unstable.
+        We might want a cleaner state machine
+        Your author would like all of the generate atspi ffi interface to be safe
+    
+    Your author would like CI on this repository.
 
-    The main problems as of [2019-04-08]:
+    The main problems:
 
-    Tow needs a safe wrapper for its ffi use.
-    I am pretty sure that in its current state tow is leaking memory.
-    Memory management is currently poorly understood by its author.
+    Tow needs a runtime on/off hotkey.
 
-    Tow also needs a runtime on/off hotkey.
 Some programs do not implement accessibility as intended, this may lead to unwanted behavior.
 Therefore we need and option to opt-out during runtime.
 
-    We probably want to save settings.
-
-    Even though we have greatly improved event handling speed, events can still be missed (at-spi2 may decide to drop events) and we may have 'false positive' caret-moved events - these may cause unwanted behavior.
-
-    Tow may get its own worker thread to do the moving while the main thread does the acquisition and accounting.
-    Currently [2019-04-08] we move at the first event that comes after the the set interval duration.
-    The current implementation makes the interval duration less meaningful.
+    We probably want to save settings at some point.
 
     Detect and 'play nice' with policy kit.
     Which may be as simple as prefixing with pk-exec?
 
 ### Caveats / bugs
 
-    [2019-04-16] Until we have a worker thread, slide times must be smaller than move (acquisition) times.
-
     [2019-04-16] Until tow can discern synthetic from device (mouse / pad / other) moves, inbetween moves lead to unwanted moves.
+
+    [2019-10-30] Sometimes tow makes an unexpected move. Need to find the origin of this.
 
 ## Installation
 
