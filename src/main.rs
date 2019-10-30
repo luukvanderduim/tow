@@ -13,6 +13,8 @@
 /// but it is not purposely restricted to it.
 /// It might work in other desktop environments aswell.
 use clap::{crate_version, App, Arg};
+use log::{debug, info, warn};
+use simple_logger;
 
 use daemonize::Daemonize;
 
@@ -374,6 +376,10 @@ fn pulse_thread(
 
                             let aim = now + Point(deltax, deltay);
 
+                            if cfg!(debug_assertions) && aim == Point(0, 0) {
+                                println!("aimed for (0,0)");
+                            }
+
                             match tx.send((now, deltax, deltay)) {
                                 Ok(()) => {
                                     state.set_prev_moved_to(Some(aim));
@@ -582,7 +588,11 @@ extern "C" fn on_caret_move(event: *mut AtspiEvent, voidptr_data: *mut ::std::ff
                 if id != atspi_id {
                     // found id but of different application
                     // this should not be
-                    eprint!("found id but of different application");
+                    warn!("different application steals focus");
+                    warn!(
+                        "focus is claimed by {:?}",
+                        ev_source.get_name().unwrap().as_str()
+                    );
                 }
             } else if state.get_accessible_id().is_none() {
                 state.set_accessible_id(Some(atspi_id));
@@ -714,6 +724,9 @@ fn spookify_tow() {
     }
 }
 fn main() {
+    simple_logger::init().unwrap_or_else(|e| eprintln!("Log initialization failed: {:?}", e));
+    info!("Captains log opened.");
+
     let (conn, screen_num) = {
         let (conn, screen_num) =
             xcb::Connection::connect(None).expect("Cannot obtain X Connection in main!");
@@ -877,7 +890,7 @@ fn main() {
                 .name("Captain Pulse".to_string())
                 .spawn(move |_| {
                     pulse_thread(
-                        cts_a.clone(),
+                        cts_a,
                         conn_a.clone(),
                         screen_num.to_owned(),
                         dur,
