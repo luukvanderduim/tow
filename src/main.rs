@@ -238,7 +238,7 @@ fn do_tow(mut begin: Point, dx: i32, dy: i32, co: Arc<Connection>, screen_num: i
     } // end delimiter of for loop
     begin
 }
-
+/*
 #[cfg(test)]
 #[test]
 fn test_do_tow() {
@@ -256,7 +256,7 @@ fn test_do_tow() {
         let r: Point = do_tow(p, q.0, q.1, conn.clone(), screen_num);
         assert_eq!(r, ans);
     }
-}
+} */
 
 fn warp_abs(x: i32, y: i32, co: Arc<Connection>, screen_num: i32) {
     let screen = co
