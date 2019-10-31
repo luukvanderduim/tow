@@ -1,4 +1,6 @@
 dist: bionic
+services:
+  - xvfb
 language: rust
 matrix:
   include:
