@@ -2,7 +2,7 @@
 
 ![Tow Logo](https://github.com/luukvanderduim/tow/blob/master/img/tugboat.png "Tow logo by Coenraad E. Meijer")
 
-Tow and its accompanying tug boat image are very much a work in progress.
+Tow and its accompanying tug boat image are very much works in progress.
 
 # tow
 
