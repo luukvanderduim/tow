@@ -1,6 +1,7 @@
 dist: bionic
 services:
   - xvfb
+  
 language: rust
 matrix:
   include:
@@ -17,3 +18,12 @@ before_install:
   - sudo apt-get -y install libdbus-1-dev
   - sudo apt-get -y install libglib2.0-dev
   
+
+addons:
+  apt:
+    packages:
+      - xvfb
+
+install:
+  - export DISPLAY=':99.0'
+  - Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
