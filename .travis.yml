@@ -1,9 +1,14 @@
+dist: bionic
 language: rust
-rust:
-  - stable
-  - beta
-  - nightly
-jobs:
-  allow_failures:
-    - rust: nightly
-  fast_finish: true
+matrix:
+  include:
+    - os: linux
+      rust: nightly
+    - os: linux
+      rust: beta
+    - os: linux
+      rust: stable
+addons:
+  apt:
+  packages:
+    - libatspi2.0-dev
