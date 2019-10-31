@@ -12,3 +12,4 @@ addons:
   apt:
   packages:
     - libatspi2.0-dev
+    - libatspi2.0-0 
