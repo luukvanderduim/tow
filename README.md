@@ -9,13 +9,18 @@ Tow and its accompanying tug boat image are very much a work in progress.
 
 Tow has the zoom area be 'towed' by the keyboard caret.
 
-(The caret is possibly better known as 'text-cursor')
+('caret' is possibly better known as 'text-cursor')
 
 Tow is written to work with xfwm4 of the Xfce4 desktop,
 however it might work with other desktop environments as well.
 Your mileage may vary.
 
-Some users who depend on the zoom feature may benefit from tow.
+Users who depend on desktop zoom may appreciate tow.
+We want zoom but don't want it to be in our way.
+
+If you think tow is cool convenience and want to help out, please consider buying me a coffee! ;)
+
+[![ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/X8X116XGP)
 
 ## The problem tow solves
  Zoom users zoom-in a portion of their screen.
