@@ -25,18 +25,17 @@ If you think tow is cool convenience and want to help out, please consider buyin
 [![ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/X8X116XGP)
 
 ## The problem tow solves
- Zoom users zoom-in a portion of their screen.
- Whilst typing some text, the text caret moves, yet the zoomed view port stays put. 
- Consequently the text cursor will be out of sight soon, forcing the user to stop to readjust the view ports position using the mouse.
- (Or some other pointer device.)
+ Zoom users zoom-in a portion of their screen to magnify a region of interest.
+ Whilst typing text, the text cursor (caret) moves, yet the zoomed view area stays put. 
+ Consequently the text cursor will be out of sight before soon, forcing the user to stop working to readjust the view area's position using the mouse or some other pointer device.
  
  This pattern will repeat and becomes a nuisance to some.
 
 
 ## The solution
 
- Tow aims to automate the readjusting by having the zoom view port
- be 'towed' by the caret.
+ Tow aims to automate the readjusting by having the zoom view port (the magnified area)
+ be 'towed' by the text cursor (caret).
 
  Applications that use a widget toolkit that supports AT-SPI2 (such as GTK or Qt),
  can share information regarding the carets position.
@@ -118,7 +117,6 @@ prerequisites include
 ## Contact
 
 Don't hesitate to drop a line at:
-Especially if you use tow and like to share your experiences.
 
 luukvanderduim (-AT-) gmail (-dot-) com
 
