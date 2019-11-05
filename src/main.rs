@@ -19,8 +19,7 @@ use simple_logger;
 use daemonize::Daemonize;
 
 use glib::translate::from_glib_full;
-use glib_sys::{GDestroyNotify, GError};
-use gtypes::gpointer;
+use glib_sys::{gpointer, GDestroyNotify, GError};
 
 use std::{f64::consts::E, ffi::CString, fs::File, sync::Arc, time::Duration};
 
@@ -337,7 +336,7 @@ fn pulse_thread(
                     if let Some(caret_now) = state.get_caret_coords_now() {
                         if let Some(caret_begin) = state.get_glyph_coords_begin() {
                             let (deltax, deltay) =
-                                { (caret_now.0 - caret_begin.0, caret_now.1 - caret_begin.1) };
+                                (caret_now.0 - caret_begin.0, caret_now.1 - caret_begin.1);
 
                             // If the caret did not move, there is nothing to do.
                             if caret_now == caret_begin {

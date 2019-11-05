@@ -1,10 +1,10 @@
-use super::*;
-
 #[cfg(test)]
 #[test]
 fn test_get_sigmoid_shape() {
-    let n = get_sigmoid_shape().len();
-    let mut shape = get_sigmoid_shape();
+    use super::get_sigmoid_shape;
+
+    let n: usize = get_sigmoid_shape().len();
+    let mut shape: Vec<f64> = get_sigmoid_shape();
     for _ in 0..(n / 2) {
         assert_eq!(shape.first(), shape.last());
         shape.pop();
@@ -15,8 +15,10 @@ fn test_get_sigmoid_shape() {
 #[cfg(test)]
 #[test]
 fn test_do_tow() {
+    use super::do_tow;
     use crate::point::Point;
     use rand::{thread_rng, Rng};
+    use std::sync::Arc;
 
     let mut rng = thread_rng();
 
