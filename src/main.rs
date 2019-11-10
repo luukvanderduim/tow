@@ -36,14 +36,15 @@ mod tests;
 use xcb;
 use xcb::base::Connection;
 use xcb::ffi::base::XCB_NONE;
+use xcb::{CW_EVENT_MASK, EVENT_MASK_KEY_PRESS, GRAB_MODE_ASYNC, KEY_PRESS, MOD_MASK_ANY};
 
 use atspi::{
     Accessible, AccessibleExt, CoordType, Event, StateSet, StateSetExt, StateType, TextExt,
 };
 
 use atspi_sys::{
-    atspi_event_listener_new, atspi_event_listener_register, atspi_exit, atspi_init, AtspiEvent,
-    AtspiEventListenerCB,
+    atspi_event_listener_deregister, atspi_event_listener_new, atspi_event_listener_register,
+    atspi_exit, atspi_init, AtspiEvent, AtspiEventListenerCB,
 };
 
 const SLIDE_DUR: Duration = Duration::from_millis(866);
@@ -390,7 +391,7 @@ fn pulse_thread(
             }
         }
         std::thread::yield_now();
-    } // belongs to loop
+    } // ends loop
 }
 
 extern "C" fn brooming(data: gpointer) {
@@ -438,10 +439,11 @@ extern "C" fn on_focus_changed(event: *mut AtspiEvent, voidptr_data: *mut ::std:
     let update_glyph_and_caret = || {
         // On focus change we want to set the caret coordinates in the global state
         // because this is likely our first opportunity
+        &conn.flush();
         if let Some(atspi_text_iface) = ev_source.get_text_iface() {
             match atspi_text_iface.get_character_extents(ev_detail1, CoordType::Screen) {
                 Err(e) => {
-                    println!("No rect on caret offset, {:?}", &e);
+                    eprintln!("No rect on caret offset, {:?}", &e);
                 }
                 Ok(glyph_extents) => {
                     state.set_caret_coords_now(Some(Point(
@@ -799,19 +801,15 @@ fn main() {
         }
     } */
 
-    #[no_mangle]
     let mut triplet = (cts.clone(), conn.clone(), screen_num);
-    #[no_mangle]
     let voidptr_data: *mut std::ffi::c_void =
         &mut triplet as *mut (Arc<CaretTowState>, Arc<Connection>, i32) as *mut std::ffi::c_void;
 
-    #[no_mangle]
     let evfn: AtspiEventListenerCB = Some(on_caret_move);
-    #[no_mangle]
     let evfn2: AtspiEventListenerCB = Some(on_focus_changed);
     let post_event_chores: GDestroyNotify = Some(brooming);
 
-    // AT-SPI event listener
+    // AT-SPI event listeners
     let caret_listener = unsafe { atspi_event_listener_new(evfn, voidptr_data, post_event_chores) };
     let focus_listener =
         unsafe { atspi_event_listener_new(evfn2, voidptr_data, post_event_chores) };
@@ -820,7 +818,6 @@ fn main() {
         .expect("CString::new failed")
         .into_raw() as *const i8;
 
-    //let evtype_focus_changed = CString::new("object:state-changed:focused")
     let evtype_focus_changed = CString::new("object:state-changed:focused")
         .expect("CString::new failed")
         .into_raw() as *const i8;
@@ -833,6 +830,7 @@ fn main() {
             println!(" Err: {:?}", err);
         }
     }
+
     crossbeam::thread::scope(|s| {
         let conn = Arc::clone(&conn);
         let cts = Arc::clone(&cts);
@@ -854,6 +852,101 @@ fn main() {
             let conn_a = Arc::clone(&conn);
             let conn_b = Arc::clone(&conn);
             let cts_a = Arc::clone(&cts);
+            s.builder()
+                .name("Anchor".to_string())
+                .spawn(move |_| {
+                    let voidptr_data: *mut std::ffi::c_void = &mut triplet
+                        as *mut (Arc<CaretTowState>, Arc<Connection>, i32)
+                        as *mut std::ffi::c_void;
+                    let setup = &conn.get_setup();
+                    let post_event_chores: GDestroyNotify = Some(brooming);
+
+                    // AT-SPI event listeners
+                    let caret_listenercopy = unsafe {
+                        atspi_event_listener_new(
+                            Some(on_caret_move),
+                            voidptr_data,
+                            post_event_chores,
+                        )
+                    };
+                    let focus_listenercopy =
+                        unsafe { atspi_event_listener_new(evfn2, voidptr_data, post_event_chores) };
+
+                    let evtype_caret_moved2 = CString::new("object:text-caret-moved")
+                        .expect("CString::new failed")
+                        .into_raw() as *const i8;
+
+                    let evtype_focus_changed2 = CString::new("object:state-changed:focused")
+                        .expect("CString::new failed")
+                        .into_raw() as *const i8;
+
+                    // start / stop with hotkey
+                    // A display may consist of more than one screen, all screens have a root window
+                    for screen in setup.roots() {
+                        xcb::grab_key_checked(
+                            &conn,
+                            true,
+                            screen.root(),
+                            MOD_MASK_ANY as u16,
+                            96 as u8,
+                            GRAB_MODE_ASYNC as u8,
+                            GRAB_MODE_ASYNC as u8,
+                        )
+                        .request_check()
+                        .expect("The key grab failed");
+                        let valuelist = [(CW_EVENT_MASK, EVENT_MASK_KEY_PRESS)];
+                        xcb::xproto::change_window_attributes_checked(
+                            &conn,
+                            screen.root(),
+                            &valuelist,
+                        )
+                        .request_check()
+                        .expect("Change of window attributes failed");
+                    }
+                    let mut on: bool = true;
+
+                    loop {
+                        &conn.flush();
+
+                        if let Some(ev) = (&conn).wait_for_event() {
+                            if ev.response_type() & !0x80 == KEY_PRESS {
+                                if !on {
+                                    info!("Tow on");
+                                    unsafe {
+                                        let err: *mut *mut GError = std::ptr::null_mut();
+                                        atspi_event_listener_register(
+                                            caret_listenercopy,
+                                            evtype_caret_moved2,
+                                            err,
+                                        );
+                                        atspi_event_listener_register(
+                                            focus_listenercopy,
+                                            evtype_focus_changed2,
+                                            err,
+                                        );
+                                    }
+                                } else {
+                                    let err: *mut *mut GError = std::ptr::null_mut();
+                                    info!("Tow off");
+                                    unsafe {
+                                        atspi_event_listener_deregister(
+                                            caret_listenercopy,
+                                            evtype_caret_moved2,
+                                            err,
+                                        );
+                                        atspi_event_listener_deregister(
+                                            focus_listenercopy,
+                                            evtype_focus_changed2,
+                                            err,
+                                        );
+                                    }
+                                }
+                                on = !on;
+                            }
+                        }
+                    }
+                })
+                .unwrap();
 
             s.builder()
                 .name("Captain Pulse".to_string())
@@ -871,7 +964,7 @@ fn main() {
                 .unwrap();
 
             s.builder()
-                .name("ms Tow - tug thread".to_string())
+                .name("ms Tow thread".to_string())
                 .spawn(move |_| {
                     q.park();
                     tow(rx.clone(), &up, q, conn_b.clone(), screen_num.to_owned());
