@@ -15,18 +15,21 @@ libc = "0.2.65"
 log = "0.4.8"
 rand = "0.7.2"
 simple_logger = "1.3.0"
+notify-rust = "3.6.3"
 
 [dependencies.xcb]
 features = ["thread"]
-version = "0.8.2"
+version = "0.9.0"
 
 [dependencies.atspi]
 git = "https://github.com/luukvanderduim/atspi"
 # path = "../gtk-rs/sys/atspi"
+package = "atspi"
 
 [dependencies.atspi-sys]
 git = "https://github.com/luukvanderduim/atspi-sys"
 # path = "../gtk-rs/sys/atspi-sys"
+package = "atspi-sys"
 
 [dependencies.gobject-sys]
 git = "https://github.com/gtk-rs/sys"

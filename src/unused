@@ -1,0 +1,54 @@
+/* fn get_caret_coords_in_focussed_accessible() -> Result<Option<Point>, Error> {
+    let mut ret: Result<Option<Point>, Error> = Ok(None);
+    for n in 0..atspi::get_desktop_count() {
+        println!("Desktop number: {} ", &n);
+        match atspi::other::get_desktop(n) {
+            Some(desktop) => {
+                let cnt: i32 = desktop.get_child_count()?;
+                println!("{} number of children", &cnt);
+                for i in 0..cnt {
+                    let app: Accessible = desktop.get_child_at_index(i)?;
+                    println!("child at index {}, accessible handle", &i);
+
+                    if let Some(sset) = app.get_state_set() {
+                        if sset.contains(StateType::Focused) {
+                            if let Some(ti) = app.get_text_iface() {
+                                println!("Focused child has text interface");
+                                let o: i32 = ti.get_caret_offset()?;
+                                let ext: Rect = ti.get_character_extents(o, CoordType::Screen)?;
+
+                                return Ok(Some(Point(ext.get_x(), ext.get_y())));
+                            }
+                        }
+                    } //  SteteSet is None
+                } // for loop # in desktop #
+            }
+
+            _ => {
+                ret = Ok(None);
+            }
+        }; // end of match
+    } // for loop over
+    println!("No more desktops to go through");
+    ret
+} */
+
+
+
+    /*     match get_caret_coords_in_focussed_accessible() {
+        Ok(caret_at_start) => {
+            match caret_at_start {
+                Some(pos) => {
+                    println!("caret at start: Point({},{})", pos.0, pos.1);
+                }
+                None => {
+                    println!("No postition");
+                }
+            }
+            cts.glyph_coords_begin = caret_at_start;
+        }
+        Err(error) => {
+            eprintln!("{:?}", error);
+        }
+    } */
+
