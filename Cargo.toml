@@ -26,11 +26,6 @@ git = "https://github.com/luukvanderduim/atspi"
 # path = "../gtk-rs/sys/atspi"
 package = "atspi"
 
-[dependencies.atspi-sys]
-git = "https://github.com/luukvanderduim/atspi-sys"
-# path = "../gtk-rs/sys/atspi-sys"
-package = "atspi-sys"
-
 [dependencies.gobject-sys]
 git = "https://github.com/gtk-rs/sys"
 package = "gobject-sys"

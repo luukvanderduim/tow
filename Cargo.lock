@@ -21,7 +21,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "atspi"
 version = "0.1.0"
-source = "git+https://github.com/luukvanderduim/atspi#ab31529f7dac0b9ae6428a3bc1a36e14adb79927"
+source = "git+https://github.com/luukvanderduim/atspi#a20d5b440d3838e28c0a3972ed5a11092b75ce0d"
 dependencies = [
  "atspi-sys 0.0.1 (git+https://github.com/luukvanderduim/atspi-sys)",
  "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -757,7 +757,6 @@ name = "tow"
 version = "0.0.2"
 dependencies = [
  "atspi 0.1.0 (git+https://github.com/luukvanderduim/atspi)",
- "atspi-sys 0.0.1 (git+https://github.com/luukvanderduim/atspi-sys)",
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-channel 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
