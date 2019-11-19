@@ -234,13 +234,7 @@ fn obtain_pointer_coords_now(co: Arc<Connection>, screen_num: i32) -> Option<Poi
 
 fn tow(rx: Receiver<Move>, up: &Unparker, q: Parker, co: Arc<Connection>, screen_num: i32) {
     loop {
-        let var = rx.clone().into_iter();
-        for mv in var {
-            let begin = mv.0;
-            let dx = mv.1;
-            let dy = mv.2;
-            do_tow(begin, dx, dy, co.clone(), screen_num);
-        }
+        rx.clone().into_iter().for_each( |mv| { do_tow(mv.0, mv.1, mv.2, co.clone(), screen_num); } );
         up.unpark();
         q.park();
     }
@@ -432,9 +426,8 @@ fn main() {
             let (tx, rx) = crossbeam::channel::unbounded::<Move>();
             let setup_conn = Arc::clone(&conn);
 
-            // Jungle of cloned Arcs to satisfy moved items in 
-            // possibly longer living closures
-            // FIXME: Reduce.  
+            // Bunch of cloned Arcs to satisfy moved items in 
+            // counter lifetime uncertainty
             let conn_b = Arc::clone(&conn);
             let fev_conn = Arc::clone(&conn);
             let cev_conn = Arc::clone(&conn);
