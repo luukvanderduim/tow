@@ -232,7 +232,7 @@ fn obtain_pointer_coords_now(co: Arc<Connection>, screen_num: i32) -> Option<Poi
     }
 }
 
-fn tow(rx: Receiver<Move>, up: &Unparker, q: Parker, co: Arc<Connection>, screen_num: i32) {
+fn tow(rx: Receiver<Move>, up: &Unparker, q: Parker, co: Arc<Connection>, screen_num: i32) -> ! {
     loop {
         rx.clone().into_iter().for_each( |mv| { do_tow(mv.0, mv.1, mv.2, co.clone(), screen_num); } );
         up.unpark();
@@ -292,6 +292,7 @@ fn pulse_thread(
                                 }
                                 Err(e) => {
                                     eprintln!("Cannot send move to tow {:?}", e);
+                                    std::process::exit(1);
                                 }
                             }
                         }
@@ -322,6 +323,7 @@ fn pulse_thread(
                                 }
                                 Err(e) => {
                                     eprintln!("Cannot send move to tow {:?}", e);
+                                    std::process::exit(1);
                                 }
                             }
                         }
@@ -349,12 +351,14 @@ fn pulse_thread(
                         }
                         Err(e) => {
                             eprintln!("Cannot send move to tow {:?}", e);
+                            std::process::exit(1);
                         }
                     }
                 }
             }
         }
-        std::thread::yield_now();
+    // std::thread::yield_now();
+    // https://www.youtube.com/watch?v=h-vHpyM1FNU
     } // ends loop
 }
 
@@ -377,7 +381,10 @@ fn spookify_tow() {
 }
 fn main() {
     
-    simple_logger::init().unwrap_or_else(|e| eprintln!("Log initialization failed: {:?}", e));
+    simple_logger::init().unwrap_or_else(|e| { 
+        eprintln!("Log initialization failed: {:?}", e);
+        std::process::exit(1);
+    });
     info!("Captains log opened.");
 
     let (conn, screen_num) = {
@@ -385,6 +392,7 @@ fn main() {
             xcb::Connection::connect(None).expect("Cannot obtain X Connection in main!");
         (Arc::new(conn), screen_num)
     };
+
     crossbeam::thread::scope( |s| {
     // mutual state
     let cts: Arc<CaretTowState> = Arc::new(CaretTowState {
@@ -402,12 +410,13 @@ fn main() {
     });
     
     // Best way to handle an argument
-    arguments::quarrel(cts.clone());
+    arguments::quarrel(&cts);
     
     cts.set_pointer_coords_now(obtain_pointer_coords_now(conn.clone(), screen_num));
 
     if !init() {
-        eprintln!("Failed to init atspi!"); 
+        eprintln!("Failed to init atspi!");
+        std::process::exit(1);
     }
     
         s.builder()
@@ -415,7 +424,7 @@ fn main() {
             .spawn( |_| {
                 Event::main();
             })
-            .unwrap();
+            .unwrap_or_else(|_| std::process::exit(1));
 
         if let Behavior::Pulse { dur } = cts.get_behavior() {
             let p = Parker::new();
@@ -529,5 +538,6 @@ fn main() {
 
     if !exit() {
         eprintln!("Failed to cleanly exit from libatspi!"); 
+        std::process::exit(1);
     }
 }

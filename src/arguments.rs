@@ -2,7 +2,7 @@ use super::*;
 
 use clap::{crate_version, App, Arg};
 
-pub(crate) fn quarrel(cts: Arc<CaretTowState>) {
+pub(crate) fn quarrel(cts: &Arc<CaretTowState>) {
     let matches = App::new("Tow")
         .version(crate_version!())
         .author("Luuk van der Duim <luukvanderduim@gmail.com>")

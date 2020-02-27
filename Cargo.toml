@@ -8,18 +8,19 @@ authors = ["Luuk van der Duim <luukvanderduim@gmail.com>"]
 [dependencies]
 clap = "2.33.0"
 crossbeam = "0.7.3"
-crossbeam-channel = "0.4.0"
-crossbeam-utils = "0.7.0"
+crossbeam-channel = "0.4.2"
+crossbeam-utils = "0.7.2"
 daemonize = "0.4.1"
-libc = "0.2.65"
+libc = "0.2.67"
 log = "0.4.8"
-rand = "0.7.2"
-simple_logger = "1.3.0"
+rand = "0.7.3"
+simple_logger = "1.6.0"
 notify-rust = "3.6.3"
 
 [dependencies.xcb]
+git = "https://github.com/rtbo/rust-xcb"
 features = ["thread"]
-version = "0.9.0"
+package = "xcb"
 
 [dependencies.atspi]
 git = "https://github.com/luukvanderduim/atspi"
@@ -37,51 +38,3 @@ package = "glib"
 [dependencies.glib-sys]
 git = "https://github.com/gtk-rs/sys"
 package = "glib-sys"
-
-# The development profile, used for `cargo build`.
-[profile.dev]
-opt-level = 0      # controls the `--opt-level` the compiler builds with.
-                   # 0-1 is good for debugging. 2 is well-optimized. Max is 3.
-                   # 's' attempts to reduce size, 'z' reduces size even more.
-debug = true       # (u32 or bool) Include debug information (debug symbols).
-                   # Equivalent to `-C debuginfo=2` compiler flag.
-rpath = false      # controls whether compiler should set loader paths.
-                   # If true, passes `-C rpath` flag to the compiler.
-lto = false        # Link Time Optimization usually reduces size of binaries
-                   # and static libraries. Increases compilation time.
-                   # If true, passes `-C lto` flag to the compiler, and if a
-                   # string is specified like 'thin' then `-C lto=thin` will
-                   # be passed.
-debug-assertions = true # controls whether debug assertions are enabled
-                   # (e.g., debug_assert!() and arithmetic overflow checks)
-codegen-units = 8 # if > 1 enables parallel code generation which improves
-                   # compile times, but prevents some optimizations.
-                   # Passes `-C codegen-units`.
-
-incremental = true
-overflow-checks = true # use overflow checks for integer arithmetic.
-                   # Passes the `-C overflow-checks=...` flag to the compiler.
-
-# The release profile, used for `cargo build --release` (and the dependencies
-# for `cargo test --release`, including the local library or binary).
-[profile.release]
-opt-level = 3
-debug = false
-rpath = false
-lto = true
-debug-assertions = false
-codegen-units = 1
-incremental = false
-overflow-checks = false
-
-# The testing profile, used for `cargo test` (for `cargo test --release` see
-# the `release` and `bench` profiles).
-[profile.test]
-opt-level = 0
-debug = 2
-rpath = false
-lto = false
-debug-assertions = true
-codegen-units = 4
-incremental = true
-overflow-checks = true
